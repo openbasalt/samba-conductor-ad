@@ -190,6 +190,9 @@ var (
 	// ErrProtectedObject: the library refuses to build the operation because
 	// it would break the domain (e.g. disabling a domain controller).
 	ErrProtectedObject = errors.New("ad: protected object")
+	// ErrInvalid: a value given to an operation constructor is not valid
+	// (wrapped with the detail; callers show a generic "invalid value").
+	ErrInvalid = errors.New("ad: invalid value")
 )
 
 // classifyWriteError maps LDAP result codes and AD's WERROR prefixes of write

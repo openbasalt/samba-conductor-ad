@@ -122,6 +122,43 @@ on the old `userAccountControl` (an RFC 4528 assertion plus a re-read before
 the write, since Samba ignores the assertion control): a stale read yields
 `ErrConflict` instead of overwriting a concurrent change.
 
+### DNS, Group Policy, password policies (P2)
+
+```go
+zones, _ := conn.DNSZones(ctx)                 // DomainDnsZones, ForestDnsZones, legacy
+pol, _ := conn.DNSPolicy(ctx)                  // AD zones and records, DCs discovered
+z, _ := conn.DNSZoneByName(ctx, "apps.example.com")
+apex, _ := conn.DNSNodeByName(ctx, z, "@")
+node, _ := conn.DNSNodeByName(ctx, z, "www")
+rec, _ := ad.NewDNSRecord(ad.DNSTypeA, "192.0.2.10", 3600)
+op, err := ad.AddDNSRecord(z, pol, apex, node, rec) // + SOA serial bump
+```
+
+AD-integrated DNS is read and written over LDAP (dnsZone/dnsNode objects,
+binary `dnsRecord` values encoded per MS-DNSP) with the user's own
+credentials; Samba's DNS server reads the database on every query, so a
+change answers at once. `UpdateDNSRecord`/`DeleteDNSRecord` delete the old
+value by its exact bytes (a concurrent change is `ErrConflict`), every change
+increments the zone's SOA serial, and `DNSPolicy` refuses the AD zones and
+the records AD manages (apex SOA/NS, `_` locator names, DC host records, the
+whole `_msdcs` zone) with `ErrProtectedObject`. `CreateDNSZone` writes the
+zone and its apex (SOA + NS of the DC in use); `DeleteDNSZone` is a tree
+delete of a non-AD zone. Previews show the decoded record next to its
+base64 value.
+
+Group Policy: `GPOs`, `GPOByID`, `GPContainers` (who links what),
+`ChangeGPLink` (link, unlink, enable/disable, enforce, link order; the old
+`gPLink` value is asserted) and `SetBlockInheritance`. GPO creation and
+deletion also touch SYSVOL: `sambatool.GPOCreate` / `GPODelete`, run with
+the user's ticket (`Session.WriteCCache` + `sambatool.KerberosCCache`).
+
+Password policy: `DomainPasswordPolicy` / `UpdateDomainPasswordPolicy`,
+`PSOs`, `CreatePSO`, `UpdatePSO`, `ApplyPSO` / `UnapplyPSO`, and
+`EffectivePasswordPolicy` (msDS-ResultantPSO and the computed expiry time).
+`DomainControllers` lists the DCs from their computer accounts (per-DC
+attributes such as `badPwdCount` need a connection to each DC: set
+`Config.DCs` to one host).
+
 ### samba-tool
 
 ```go
@@ -176,5 +213,8 @@ network is only reachable from that host): the `ad` tests on the host, the
 P0 complete (2026-10-01): all unit and lab tests pass. P1 extensions
 (2026-10-02) for conductor: profile attributes, sorting/windows, rename,
 computer enable/disable, FSMO/DC-list helper operations, KDC pinning for
-TGS requests; lab-tested. See
+TGS requests; lab-tested. P2 (2026-10-02): DNS zones and records over
+LDAP, GPOs and links, domain and fine-grained password policies, effective
+policy, DC list, ccache export for samba-tool; lab-tested
+(`lab_p2_test.go`, `sambatool/lab_p2_test.go`). See
 `../planning/docs/decisions.md` for the choices made and what is left for P1.

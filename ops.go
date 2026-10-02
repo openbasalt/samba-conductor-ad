@@ -43,6 +43,9 @@ type AttrChange struct {
 	// holds a placeholder.
 	Sensitive bool
 	secret    []string
+	// Display holds a readable form of binary values (shown as LDIF
+	// comments next to their base64 encoding); never sent.
+	Display []string
 }
 
 // Change is one LDAP write request.
@@ -58,10 +61,21 @@ type Change struct {
 	// server applies the change only if the entry still matches it
 	// (optimistic concurrency); otherwise the result is ErrConflict.
 	Assert escape.Filter
+	// TreeDelete (ChangeDelete only) deletes the entry with its whole
+	// subtree (LDAP_SERVER_TREE_DELETE_OID). Only constructors that show
+	// the subtree in the preview set it (a DNS zone with its records).
+	TreeDelete bool
+	// Notes are human-readable lines rendered as LDIF comments under the
+	// dn (e.g. the decoded form of a binary dnsRecord value). They are not
+	// sent to the server.
+	Notes []string
 }
 
 // assertionControlOID is the LDAP Assertion Control (RFC 4528).
 const assertionControlOID = "1.3.6.1.1.12"
+
+// treeDeleteControlOID is LDAP_SERVER_TREE_DELETE_OID (MS-ADTS 3.1.1.3.4.1.15).
+const treeDeleteControlOID = "1.2.840.113556.1.4.805"
 
 // Preview is the exact list of LDAP writes an Operation performs, in order.
 // Show it to the user before calling Apply; Apply sends exactly this.
@@ -84,24 +98,26 @@ func (p Preview) String() string {
 			sb.WriteByte('\n')
 		}
 		fmt.Fprintf(&sb, "dn: %s\n", c.DN)
+		for _, n := range c.Notes {
+			fmt.Fprintf(&sb, "# %s\n", strings.ReplaceAll(n, "\n", " "))
+		}
 		if c.Assert != nil {
 			f, _ := escape.Compile(c.Assert)
 			fmt.Fprintf(&sb, "# only if the entry still matches %s\ncontrol: %s true\n", f, assertionControlOID)
+		}
+		if c.TreeDelete {
+			fmt.Fprintf(&sb, "# the entry and everything below it\ncontrol: %s true\n", treeDeleteControlOID)
 		}
 		fmt.Fprintf(&sb, "changetype: %s\n", c.Type)
 		switch c.Type {
 		case ChangeAdd:
 			for _, a := range c.Attrs {
-				for _, v := range a.Values {
-					writeLDIFValue(&sb, a.Name, v)
-				}
+				writeAttrValues(&sb, a)
 			}
 		case ChangeModify:
 			for _, a := range c.Attrs {
 				fmt.Fprintf(&sb, "%s: %s\n", a.Op, a.Name)
-				for _, v := range a.Values {
-					writeLDIFValue(&sb, a.Name, v)
-				}
+				writeAttrValues(&sb, a)
 				sb.WriteString("-\n")
 			}
 		case ChangeModDN:
@@ -112,6 +128,17 @@ func (p Preview) String() string {
 		}
 	}
 	return sb.String()
+}
+
+// writeAttrValues writes the values of one attribute, each preceded by its
+// readable form when the attribute carries one.
+func writeAttrValues(sb *strings.Builder, a AttrChange) {
+	for i, v := range a.Values {
+		if i < len(a.Display) && a.Display[i] != "" {
+			fmt.Fprintf(sb, "# %s: %s\n", a.Name, strings.ReplaceAll(a.Display[i], "\n", " "))
+		}
+		writeLDIFValue(sb, a.Name, v)
+	}
 }
 
 func boolInt(b bool) int {
@@ -226,6 +253,9 @@ func (c *Conn) applyChange(ch Change) error {
 		}
 		return c.l.Modify(req)
 	case ChangeDelete:
+		if ch.TreeDelete {
+			controls = append(controls, &ldap.ControlString{ControlType: treeDeleteControlOID, Criticality: true})
+		}
 		return c.l.Del(ldap.NewDelRequest(ch.DN, controls))
 	case ChangeModDN:
 		req := ldap.NewModifyDNRequest(ch.DN, ch.NewRDN, ch.DeleteOldRDN, ch.NewSuperior)

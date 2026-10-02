@@ -104,8 +104,13 @@ var (
 		"displayName", "givenName", "sn", "mail", "description", "department", "title", "userAccountControl",
 		"msDS-User-Account-Control-Computed", "pwdLastSet", "lockoutTime", "accountExpires", "lastLogonTimestamp",
 		"memberOf", "primaryGroupID", "whenCreated", "whenChanged", "telephoneNumber", "mobile", "homePhone",
-		"physicalDeliveryOfficeName", "company", "streetAddress", "l", "st", "postalCode", "wWWHomePage"}
-	GroupAttributes = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "cn", "description",
+		"physicalDeliveryOfficeName", "company", "streetAddress", "l", "st", "postalCode", "wWWHomePage",
+		"badPwdCount", "badPasswordTime", "whenCreated"}
+	// UserExpiryAttributes adds the constructed password expiry time. The
+	// DC computes it per entry (it about doubles the cost of a large
+	// search), so it is only read where needed.
+	UserExpiryAttributes = append(append([]string(nil), UserAttributes...), "msDS-UserPasswordExpiryTimeComputed")
+	GroupAttributes      = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "cn", "description",
 		"groupType", "mail", "memberOf"}
 	OUAttributes       = []string{"distinguishedName", "objectGUID", "ou", "description", "gPLink"}
 	ComputerAttributes = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "dNSHostName",
@@ -146,6 +151,23 @@ type User struct {
 	LastLogon      FileTime
 	MemberOf       []string
 	PrimaryGroupID uint32
+	// PasswordExpiry is msDS-UserPasswordExpiryTimeComputed, read only with
+	// UserExpiryAttributes; Never when the password does not expire.
+	PasswordExpiry FileTime
+	// BadPwdCount and BadPasswordTime are per DC (not replicated).
+	BadPwdCount     int
+	BadPasswordTime FileTime
+	// WhenCreated is the generalized time the account was created.
+	WhenCreated time.Time
+}
+
+// PasswordExpires returns when the password expires; zero when it never
+// does or the attribute was not read.
+func (u User) PasswordExpires() time.Time {
+	if u.PasswordExpiry <= 0 || u.PasswordExpiry == Never {
+		return time.Time{}
+	}
+	return u.PasswordExpiry.Time()
 }
 
 // Enabled reports whether the account is not disabled.
@@ -286,7 +308,27 @@ func UserFromEntry(e *ldap.Entry) User {
 		LastLogon:         FileTime(attrInt64(e, "lastLogonTimestamp")),
 		MemberOf:          e.GetAttributeValues("memberOf"),
 		PrimaryGroupID:    uint32(attrInt64(e, "primaryGroupID")),
+		PasswordExpiry:    FileTime(attrInt64(e, "msDS-UserPasswordExpiryTimeComputed")),
+		BadPwdCount:       int(attrInt64(e, "badPwdCount")),
+		BadPasswordTime:   FileTime(attrInt64(e, "badPasswordTime")),
+		WhenCreated:       generalizedTime(e.GetAttributeValue("whenCreated")),
 	}
+}
+
+// generalizedTime parses an LDAP GeneralizedTime ("20261002021448.0Z").
+func generalizedTime(v string) time.Time {
+	if v == "" {
+		return time.Time{}
+	}
+	// AD writes "YYYYMMDDHHMMSS.0Z"; drop the fraction and parse the rest.
+	if i := strings.IndexByte(v, '.'); i > 0 {
+		v = v[:i] + "Z"
+	}
+	t, err := time.Parse("20060102150405Z", v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // GroupFromEntry decodes an entry read with GroupAttributes.

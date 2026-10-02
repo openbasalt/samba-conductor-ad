@@ -1,11 +1,14 @@
 package ad
 
 import (
+	"bytes"
 	"context"
 	"encoding/asn1"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -179,9 +182,28 @@ func TestCCacheFromASRep(t *testing.T) {
 			Flags: krbasn1.BitString{Bytes: []byte{0x40, 0xe1, 0, 0}, BitLength: 32},
 		},
 	}}
-	cc, err := ccacheFromASRep(rep, cname, "LAB.EXAMPLE.TEST")
+	cc, raw, err := ccacheFromASRep(rep, cname, "LAB.EXAMPLE.TEST")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// WriteCCache writes exactly these bytes to a new 0600 file.
+	sess := &Session{ccache: raw, expires: now.Add(10 * time.Hour)}
+	path := filepath.Join(t.TempDir(), "cc")
+	if err := sess.WriteCCache(path); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("ccache file mode: %v %v", st, err)
+	}
+	if b, _ := os.ReadFile(path); !bytes.Equal(b, raw) {
+		t.Fatal("ccache file content")
+	}
+	if err := sess.WriteCCache(path); err == nil {
+		t.Fatal("existing ccache file overwritten")
+	}
+	expired := &Session{ccache: raw, expires: now.Add(-time.Minute)}
+	if err := expired.WriteCCache(path + "2"); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("expired session: %v", err)
 	}
 	if cc.GetClientPrincipalName().PrincipalNameString() != "jdoe" || cc.GetClientRealm() != "LAB.EXAMPLE.TEST" {
 		t.Fatalf("principal %v", cc.GetClientPrincipalName())

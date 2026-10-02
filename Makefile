@@ -38,6 +38,7 @@ fuzz:
 	go test ./sid -run '^$$' -fuzz FuzzSID -fuzztime $(FUZZTIME)
 	go test ./sambatool -run '^$$' -fuzz FuzzValidateValue -fuzztime $(FUZZTIME)
 	go test ./helper -run '^$$' -fuzz FuzzDecode -fuzztime $(FUZZTIME)
+	go test . -run '^$$' -fuzz FuzzDecodeDNSRecord -fuzztime $(FUZZTIME)
 
 # Installs the linters in the user's GOPATH (no root).
 tools:

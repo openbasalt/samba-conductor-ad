@@ -191,3 +191,37 @@ PdcEmulationMasterRole owner: CN=NTDS Settings,CN=DC2,CN=Servers,CN=Default-Firs
 		t.Error("error line accepted as a member")
 	}
 }
+
+func TestGPOOperations(t *testing.T) {
+	r := &Runner{Credentials: KerberosCCache{Path: "/run/conductor/cc-1"}}
+	got, err := Preview(r, GPOCreate{DisplayName: "Lab Baseline", URL: "ldap://dc1.lab.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `samba-tool gpo create -Hldap://dc1.lab.test --use-kerberos=required --use-krb5-ccache=/run/conductor/cc-1 -- 'Lab Baseline'`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	id, err := GPOCreate{}.Parse([]byte("Using temporary directory /tmp/x\nGPO 'Lab Baseline' created as {c06bded1-2aed-457f-be21-3d4ba75b44ce}\n"))
+	if err != nil || id != "{C06BDED1-2AED-457F-BE21-3D4BA75B44CE}" {
+		t.Fatalf("parse create: %q %v", id, err)
+	}
+	if _, err := (GPOCreate{}).Parse([]byte("ERROR")); err == nil {
+		t.Fatal("create without id accepted")
+	}
+	for _, bad := range []GPOCreate{{DisplayName: "-x", URL: "ldap://dc1"}, {DisplayName: "a\nb", URL: "ldap://dc1"},
+		{DisplayName: "ok", URL: "tdb:///var/lib/samba"}, {DisplayName: "ok", URL: "ldap://dc1 -k"}, {DisplayName: `a"b`, URL: "ldap://dc1"}} {
+		if _, err := bad.Command(); err == nil {
+			t.Errorf("create %+v accepted", bad)
+		}
+	}
+	got, err = Preview(r, GPODelete{ID: "{C06BDED1-2AED-457F-BE21-3D4BA75B44CE}", URL: "ldap://dc1.lab.test"})
+	if err != nil || !strings.HasSuffix(got, "-- '{C06BDED1-2AED-457F-BE21-3D4BA75B44CE}'") {
+		t.Fatalf("delete preview %q %v", got, err)
+	}
+	for _, bad := range []string{"", "C06BDED1-2AED-457F-BE21-3D4BA75B44CE", "{x}", "{C06BDED1-2AED-457F-BE21-3D4BA75B44CE}x"} {
+		if _, err := (GPODelete{ID: bad, URL: "ldap://dc1"}).Command(); err == nil {
+			t.Errorf("delete id %q accepted", bad)
+		}
+	}
+}

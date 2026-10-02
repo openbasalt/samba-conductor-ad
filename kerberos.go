@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +56,8 @@ type Session struct {
 	realm     string
 	expires   time.Time
 	closed    bool
+	// ccache is the TGT in MIT ccache format, for WriteCCache.
+	ccache []byte
 }
 
 // Principal returns "user@REALM".
@@ -71,8 +75,36 @@ func (s *Session) Close() {
 	defer s.mu.Unlock()
 	if !s.closed {
 		s.cl.Destroy()
+		clear(s.ccache)
+		s.ccache = nil
 		s.closed = true
 	}
+}
+
+// WriteCCache writes the session's TGT as an MIT credential cache to path,
+// a new file created with mode 0600 (it must not exist), for a tool that
+// only takes a ccache (samba-tool --use-krb5-ccache, see
+// sambatool.KerberosCCache). The file holds a usable ticket until the TGT
+// expires: put it in a private directory and remove it right after use.
+func (s *Session) WriteCCache(path string) error {
+	s.mu.Lock()
+	raw := slices.Clone(s.ccache)
+	closed := s.closed || time.Now().After(s.expires)
+	s.mu.Unlock()
+	defer clear(raw)
+	if closed || len(raw) == 0 {
+		return ErrSessionClosed
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	return f.Close()
 }
 
 // ErrSessionClosed is returned when a closed or expired Session is used.
@@ -503,7 +535,7 @@ func SignIn(ctx context.Context, cfg Config, username, password string) (*Sessio
 		}
 		return nil, err
 	}
-	cc, err := ccacheFromASRep(rep, cname, ks.realm)
+	cc, raw, err := ccacheFromASRep(rep, cname, ks.realm)
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +550,7 @@ func SignIn(ctx context.Context, cfg Config, username, password string) (*Sessio
 		principal: cname.PrincipalNameString() + "@" + ks.realm,
 		realm:     ks.realm,
 		expires:   rep.DecryptedEncPart.EndTime,
+		ccache:    raw,
 	}, nil
 }
 

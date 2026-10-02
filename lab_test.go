@@ -244,7 +244,8 @@ func TestLabPaging(t *testing.T) {
 
 	n := 0
 	start := time.Now()
-	for u, err := range c.Users(ctx, people, nil) {
+	// The seeded user0001…user2500 (OU=People also holds locked.people).
+	for u, err := range c.Users(ctx, people, escape.Prefix("sAMAccountName", "user")) {
 		if err != nil {
 			t.Fatal(err)
 		}

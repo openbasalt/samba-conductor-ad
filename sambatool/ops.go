@@ -434,3 +434,72 @@ func (GroupListMembers) Parse(out []byte) ([]string, error) {
 	}
 	return dns, sc.Err()
 }
+
+// gpoIDRE is the "{GUID}" name of a GPO.
+var gpoIDRE = regexp.MustCompile(`\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}`)
+
+func checkGPOURL(u string) error {
+	if !urlRE.MatchString(u) || !strings.HasPrefix(u, "ldap") {
+		return fmt.Errorf("sambatool: invalid URL %q (ldap:// or ldaps:// of a DC)", u)
+	}
+	return nil
+}
+
+// GPOCreate creates an empty GPO (the groupPolicyContainer in LDAP and its
+// folder in SYSVOL): `samba-tool gpo create -Hldap://DC -- NAME`. Run it
+// with the caller's own credentials (KerberosCCache); AD decides whether
+// the caller may create GPOs. The result is the new GPO's "{GUID}".
+type GPOCreate struct {
+	DisplayName string
+	// URL of the DC, e.g. "ldap://dc1.example.com" (required).
+	URL string
+}
+
+// Command implements Operation.
+func (o GPOCreate) Command() (Command, error) {
+	if err := ValidateValue(o.DisplayName); err != nil {
+		return Command{}, err
+	}
+	if len([]rune(o.DisplayName)) > 200 || strings.ContainsAny(o.DisplayName, "\\\"") {
+		return Command{}, fmt.Errorf("sambatool: invalid GPO name %q", o.DisplayName)
+	}
+	if err := checkGPOURL(o.URL); err != nil {
+		return Command{}, err
+	}
+	return Command{Subcommand: []string{"gpo", "create"}, Options: []string{"-H" + o.URL}, Args: []string{o.DisplayName}}, nil
+}
+
+var gpoCreatedRE = regexp.MustCompile(`created as (\{[0-9A-Fa-f-]{36}\})`)
+
+// Parse implements Operation.
+func (GPOCreate) Parse(out []byte) (string, error) {
+	m := gpoCreatedRE.FindSubmatch(out)
+	if m == nil {
+		return "", fmt.Errorf("sambatool: GPO id not reported: %q", strings.TrimSpace(string(out)))
+	}
+	return strings.ToUpper(string(m[1])), nil
+}
+
+// GPODelete deletes a GPO (LDAP and SYSVOL), together with any links to it
+// samba-tool finds: `samba-tool gpo del -Hldap://DC -- {GUID}`. Callers
+// refuse to delete a linked GPO before getting here.
+type GPODelete struct {
+	ID  string // "{GUID}"
+	URL string
+}
+
+// Command implements Operation.
+func (o GPODelete) Command() (Command, error) {
+	if !gpoIDRE.MatchString(o.ID) || len(o.ID) != 38 {
+		return Command{}, fmt.Errorf("sambatool: invalid GPO id %q", o.ID)
+	}
+	if err := checkGPOURL(o.URL); err != nil {
+		return Command{}, err
+	}
+	return Command{Subcommand: []string{"gpo", "del"}, Options: []string{"-H" + o.URL}, Args: []string{o.ID}}, nil
+}
+
+// Parse implements Operation.
+func (GPODelete) Parse(out []byte) (struct{}, error) {
+	return struct{}{}, expectOutput(out, "deleted")
+}

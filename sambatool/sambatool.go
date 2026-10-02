@@ -172,7 +172,9 @@ func argv(c Command, credArgs []string) ([]string, error) {
 		}
 	}
 	for _, o := range c.Options {
-		if !strings.HasPrefix(o, "--") || strings.ContainsFunc(o, unicode.IsControl) {
+		// Long options, or -H with its value attached (some samba-tool
+		// commands, e.g. "gpo", only know the short form of --URL).
+		if !(strings.HasPrefix(o, "--") || (strings.HasPrefix(o, "-H") && len(o) > 2)) || strings.ContainsFunc(o, unicode.IsControl) {
 			return nil, fmt.Errorf("sambatool: invalid option %q", o)
 		}
 	}

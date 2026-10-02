@@ -110,6 +110,7 @@ type Conn struct {
 	dc          DC
 	baseDN      string
 	configDN    string
+	forestDN    string
 	dnsHostName string
 	functional  int
 	realm       string
@@ -124,6 +125,14 @@ func (c *Conn) BaseDN() string { return c.baseDN }
 
 // ConfigurationDN returns the configurationNamingContext.
 func (c *Conn) ConfigurationDN() string { return c.configDN }
+
+// ForestDN returns the rootDomainNamingContext (the forest root domain's
+// DN; the domain's own DN in a single-domain forest).
+func (c *Conn) ForestDN() string { return c.forestDN }
+
+// DCHostName returns the DNS host name of the DC this connection is bound
+// to, as the DC reports it (RootDSE dnsHostName).
+func (c *Conn) DCHostName() string { return c.dnsHostName }
 
 // DNSDomain returns the domain's DNS name (lowercase realm).
 func (c *Conn) DNSDomain() string { return c.dnsDomain }
@@ -294,7 +303,8 @@ func (c *Conn) guard(ctx context.Context, fn func() error) error {
 func (c *Conn) readRootDSE(ctx context.Context) error {
 	return c.guard(ctx, func() error {
 		res, err := c.l.Search(ldap.NewSearchRequest("", ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
-			"(objectClass=*)", []string{"defaultNamingContext", "configurationNamingContext", "dnsHostName", "domainFunctionality"}, nil))
+			"(objectClass=*)", []string{"defaultNamingContext", "configurationNamingContext", "rootDomainNamingContext",
+				"dnsHostName", "domainFunctionality"}, nil))
 		if err != nil {
 			return fmt.Errorf("ad: reading RootDSE: %w", err)
 		}
@@ -304,7 +314,11 @@ func (c *Conn) readRootDSE(ctx context.Context) error {
 		e := res.Entries[0]
 		c.baseDN = e.GetAttributeValue("defaultNamingContext")
 		c.configDN = e.GetAttributeValue("configurationNamingContext")
-		c.dnsHostName = e.GetAttributeValue("dnsHostName")
+		c.dnsHostName = strings.ToLower(e.GetAttributeValue("dnsHostName"))
+		c.forestDN = e.GetAttributeValue("rootDomainNamingContext")
+		if c.forestDN == "" {
+			c.forestDN = e.GetAttributeValue("defaultNamingContext")
+		}
 		c.functional, _ = strconv.Atoi(e.GetAttributeValue("domainFunctionality"))
 		if c.baseDN == "" {
 			return errors.New("ad: RootDSE has no defaultNamingContext")
