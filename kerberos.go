@@ -91,10 +91,16 @@ func (s *Session) serviceTicket(ctx context.Context, spn string) (messages.Ticke
 
 // ctxDialer is the go-krb5 dialer for TGS requests: it resolves names with
 // the configured resolver and honours the context of the current call.
+//
+// go-krb5 shuffles the configured KDCs before every request, so a TGS-REQ
+// could reach a DC that has not replicated a change yet (a password just
+// changed through kpasswd: KDC_ERR_KEY_EXPIRED). kdcOrder pins the order
+// instead: the KDC that issued the TGT first, then the configured order.
 type ctxDialer struct {
-	mu  sync.Mutex
-	ctx context.Context
-	d   *net.Dialer
+	mu       sync.Mutex
+	ctx      context.Context
+	d        *net.Dialer
+	kdcOrder []string // "host:88", tried in order for any KDC address
 }
 
 func (c *ctxDialer) set(ctx context.Context) {
@@ -111,7 +117,37 @@ func (c *ctxDialer) Dial(network, addr string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("ad: Kerberos over %s is disabled", network)
 	}
+	if _, port, err := net.SplitHostPort(addr); err == nil && port == "88" && len(c.kdcOrder) > 0 {
+		var firstErr error
+		for _, a := range c.kdcOrder {
+			conn, err := c.d.DialContext(ctx, network, a)
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, firstErr
+	}
 	return c.d.DialContext(ctx, network, addr)
+}
+
+// kdcOrderFrom puts first (the KDC that answered) in front of hosts.
+func kdcOrderFrom(first string, hosts []string) []string {
+	out := make([]string, 0, len(hosts))
+	if first != "" {
+		out = append(out, net.JoinHostPort(first, "88"))
+	}
+	for _, h := range hosts {
+		if h != first {
+			out = append(out, net.JoinHostPort(h, "88"))
+		}
+	}
+	return out
 }
 
 // kdcSet is the realm's KDCs plus how to reach them.
@@ -120,6 +156,8 @@ type kdcSet struct {
 	hosts []string
 	cfg   *config.Config
 	dial  *net.Dialer
+	// answered is the last host that replied (any reply, KRB-ERROR included).
+	answered string
 }
 
 func newKDCSet(ctx context.Context, cfg Config) (*kdcSet, error) {
@@ -191,6 +229,7 @@ func (k *kdcSet) send(ctx context.Context, port string, msg []byte) ([]byte, err
 		}
 		rb, err := k.sendOne(ctx, net.JoinHostPort(h, port), msg)
 		if err == nil {
+			k.answered = h
 			return rb, nil
 		}
 		errs = append(errs, h+": "+err.Error())
@@ -468,7 +507,7 @@ func SignIn(ctx context.Context, cfg Config, username, password string) (*Sessio
 	if err != nil {
 		return nil, err
 	}
-	cd := &ctxDialer{ctx: context.Background(), d: ks.dial}
+	cd := &ctxDialer{ctx: context.Background(), d: ks.dial, kdcOrder: kdcOrderFrom(ks.answered, ks.hosts)}
 	cl, err := client.NewFromCCache(cc, ks.cfg, client.DisablePAFXFAST(true), client.UseDialer(cd))
 	if err != nil {
 		return nil, fmt.Errorf("ad: building Kerberos client: %w", err)

@@ -14,7 +14,7 @@ Go 1.27.
 | `ad/escape` | RFC 4515 filter builder and RFC 4514 DN escaping (fuzz-tested); `RawFilter` only for trusted constants |
 | `ad/sid` | SID and GUID decoding/formatting, well-known RIDs (Domain Admins = 512) |
 | `ad/sambatool` | Typed samba-tool operations: validated fields to argv, `--` before user values, no secrets in argv, parsed output, exact command preview |
-| `ad/helper` | Protocol types of the privileged helper (Unix socket, allowlisted typed requests); the helper itself is built in `conductor` |
+| `ad/helper` | Protocol of the privileged helper (Unix socket, allowlisted typed requests, result types, a `Call` client); the helper itself is built in `conductor` |
 
 ## Usage
 
@@ -77,6 +77,12 @@ for u, err := range conn.Users(ctx, "OU=People,OU=Lab,"+conn.BaseDN(),
 }
 ```
 
+`SearchRequest.SortBy` adds an RFC 2891 sort (works together with paging on
+Samba; the control is encoded by the library because go-ldap's reverse flag
+is ignored by Samba). `Conn.Count` counts without attributes and
+`Conn.SearchWindow(req, skip, n)` returns one page of a sorted search for
+page-numbered UIs.
+
 Filters only come from the `escape` builders (`Eq`, `Prefix`, `Contains`,
 `And`, `Or`, `Not`, `BitAnd`, `InChain`, `EqBytes`…). `escape.RawFilter` exists
 for constants such as `"(objectClass=*)"` and must never hold user input.
@@ -98,10 +104,15 @@ fmt.Println(op.Preview()) // LDIF, unicodePwd shown as <redacted>
 err = conn.Apply(ctx, op) // errors.Is: ErrAccessDenied, ErrPasswordPolicy, ErrConflict, ...
 ```
 
-Operations: `CreateUser`, `UpdateUser`, `SetUserEnabled`, `UnlockUser`,
+Operations: `CreateUser`, `UpdateUser`, `SetUserEnabled`,
+`SetComputerEnabled` (refuses domain controllers), `UnlockUser`,
 `ResetPassword` (admin), `ChangePassword` (self, LDAP delete+add of
-`unicodePwd`), `MoveObject`, `AddGroupMember`, `RemoveGroupMember`,
-`CreateGroup`, `CreateOU`, `DeleteObject` (never recursive).
+`unicodePwd`), `MoveObject`, `RenameObject`, `AddGroupMember`,
+`RemoveGroupMember`, `CreateGroup`, `CreateOU`, `DeleteObject` (never
+recursive). `UserUpdateAttributes()` lists what `UpdateUser` can write; the
+lab test `TestLabSelfWritableAttributes` pins which of them Samba lets users
+write on themselves (telephoneNumber, mobile, homePhone,
+physicalDeliveryOfficeName, streetAddress, l, st, postalCode, wWWHomePage).
 `ChangePasswordKerberos` (kpasswd, RFC 3244 version 1) changes a password
 without an LDAP bind, which users who must change or whose password expired
 cannot do.
@@ -140,7 +151,10 @@ positional after `--` and may not start with `-`.
 - Failover never retries a refused password on another DC or KDC.
 - Read-your-writes: an object created on one DC is unknown to the other DCs
   (LDAP and KDC) until replication. Put the DC that performed the write first
-  in `Config.Preferred` for follow-up calls.
+  in `Config.Preferred` for follow-up calls. A `Session` sends its TGS
+  requests to the KDC that issued its TGT first, then in the configured
+  order (go-krb5 alone shuffles KDCs, which made a sign-in right after a
+  kpasswd change fail on a DC that had not replicated it yet).
 
 ## Development
 
@@ -159,5 +173,8 @@ network is only reachable from that host): the `ad` tests on the host, the
 
 ## Status
 
-P0 complete (2026-10-01): all unit and lab tests pass. See
+P0 complete (2026-10-01): all unit and lab tests pass. P1 extensions
+(2026-10-02) for conductor: profile attributes, sorting/windows, rename,
+computer enable/disable, FSMO/DC-list helper operations, KDC pinning for
+TGS requests; lab-tested. See
 `../planning/docs/decisions.md` for the choices made and what is left for P1.

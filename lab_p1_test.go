@@ -245,3 +245,46 @@ func TestLabRenameAndComputer(t *testing.T) {
 	}
 	t.Logf("OU renamed, computer created/disabled/deleted, DC protected (%d DCs)", len(dcs))
 }
+
+// TestLabKpasswdThenTGS: right after a kpasswd change on one DC, signing in
+// and binding to LDAP must not hit a DC that has not replicated the change
+// (go-krb5 shuffles KDCs; the session pins the KDC that issued the TGT).
+func TestLabKpasswdThenTGS(t *testing.T) {
+	ctx := labCtx(t)
+	admin := adminConn(t)
+	cfg := labConfig(t)
+	cfg.Preferred = []string{admin.DC().Host}
+	sfx := randSuffix()
+	sam := "kp" + sfx
+	oldPw := "Old-" + sfx + "-Pw9x"
+	op, err := CreateUser(NewUser{ParentDN: "OU=Special,OU=Lab," + admin.BaseDN(), CN: "Kpasswd " + sfx, SAMAccountName: sam,
+		UserPrincipalName: sam + "@" + admin.DNSDomain(), Password: oldPw, MustChangePassword: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Apply(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	dn := op.Preview().Changes[0].DN
+	t.Cleanup(func() {
+		d, _ := DeleteObject(dn)
+		_ = admin.Apply(labCtx(t), d)
+	})
+	newPw := "New-" + sfx + "-Pw9x"
+	if err := ChangePasswordKerberos(ctx, cfg, sam, oldPw, newPw); err != nil {
+		t.Fatalf("kpasswd: %v", err)
+	}
+	for i := range 6 {
+		s, err := SignIn(ctx, cfg, sam, newPw)
+		if err != nil {
+			t.Fatalf("sign-in %d: %v", i, err)
+		}
+		c, err := Connect(ctx, cfg, KerberosAuth(s))
+		if err != nil {
+			t.Fatalf("bind %d right after the change: %v", i, err)
+		}
+		_ = c.Close()
+		s.Close()
+	}
+	t.Logf("kpasswd on %s, then 6 sign-ins + GSSAPI binds without KEY_EXPIRED", admin.DC().Host)
+}

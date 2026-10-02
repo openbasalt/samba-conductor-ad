@@ -1,9 +1,12 @@
 package ad
 
 import (
+	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func strp(s string) *string { return &s }
@@ -107,5 +110,55 @@ func TestSortControlEncoding(t *testing.T) {
 	p := sortControl{attr: "cn"}.Encode()
 	if len(p.Children) != 2 || p.Children[0].Value != "1.2.840.113556.1.4.473" {
 		t.Fatalf("control packet %v", p.Children)
+	}
+}
+
+func TestSessionDialerPinsKDCOrder(t *testing.T) {
+	// Two "KDCs"; go-krb5 may ask for either, the session dials the pinned one.
+	lnA, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lnA.Close() }()
+	lnB, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer func() { _ = lnB.Close() }()
+	_, portA, _ := net.SplitHostPort(lnA.Addr().String())
+	_, portB, _ := net.SplitHostPort(lnB.Addr().String())
+	got := make(chan string, 4)
+	for name, ln := range map[string]net.Listener{"A": lnA, "B": lnB} {
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				got <- name
+				_ = c.Close()
+			}
+		}()
+	}
+	d := &ctxDialer{ctx: context.Background(), d: &net.Dialer{Timeout: time.Second},
+		kdcOrder: []string{"127.0.0.1:" + portA, "127.0.0.1:" + portB}}
+	// The KDC address go-krb5 picked (B, port rewritten to 88 by config) is ignored.
+	c, err := d.Dial("tcp", "kdc-b.example:88")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if n := <-got; n != "A" {
+		t.Fatalf("dialed %s, want the pinned first KDC", n)
+	}
+	// First KDC down: the next one in order.
+	_ = lnA.Close()
+	c, err = d.Dial("tcp", "kdc-a.example:88")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if n := <-got; n != "B" {
+		t.Fatalf("dialed %s after A went down", n)
+	}
+	if o := kdcOrderFrom("dc2.lab", []string{"dc1.lab", "dc2.lab"}); o[0] != "dc2.lab:88" || o[1] != "dc1.lab:88" || len(o) != 2 {
+		t.Fatalf("order %v", o)
 	}
 }
