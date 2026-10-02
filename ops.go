@@ -357,7 +357,45 @@ type UserUpdate struct {
 	Department      *string
 	Title           *string
 	TelephoneNumber *string
+	Mobile          *string
+	HomePhone       *string
+	Office          *string // physicalDeliveryOfficeName
+	Company         *string
+	StreetAddress   *string
+	City            *string // l
+	State           *string // st
+	PostalCode      *string
+	HomePage        *string // wWWHomePage
 }
+
+// userUpdateField pairs an LDAP attribute with its UserUpdate field.
+type userUpdateField struct {
+	Attr string
+	v    *string
+}
+
+func (u UserUpdate) fields() []userUpdateField {
+	return []userUpdateField{{"displayName", u.DisplayName}, {"givenName", u.GivenName}, {"sn", u.Surname},
+		{"mail", u.Mail}, {"description", u.Description}, {"department", u.Department}, {"title", u.Title},
+		{"telephoneNumber", u.TelephoneNumber}, {"mobile", u.Mobile}, {"homePhone", u.HomePhone},
+		{"physicalDeliveryOfficeName", u.Office}, {"company", u.Company}, {"streetAddress", u.StreetAddress},
+		{"l", u.City}, {"st", u.State}, {"postalCode", u.PostalCode}, {"wWWHomePage", u.HomePage}}
+}
+
+// UserUpdateAttributes lists the LDAP attributes UserUpdate can write, in the
+// order they appear in a preview.
+func UserUpdateAttributes() []string {
+	f := UserUpdate{}.fields()
+	out := make([]string, len(f))
+	for i, x := range f {
+		out[i] = x.Attr
+	}
+	return out
+}
+
+// maxAttrValue bounds a profile value (AD's rangeUpper for these attributes
+// is at most 1024; most are 64-256 and the DC enforces the exact limit).
+const maxAttrValue = 1024
 
 // UpdateUser builds a replace of the given profile attributes.
 func UpdateUser(dn string, u UserUpdate) (*Operation, error) {
@@ -365,19 +403,18 @@ func UpdateUser(dn string, u UserUpdate) (*Operation, error) {
 		return nil, err
 	}
 	var attrs []AttrChange
-	for _, kv := range []struct {
-		name string
-		v    *string
-	}{{"displayName", u.DisplayName}, {"givenName", u.GivenName}, {"sn", u.Surname}, {"mail", u.Mail},
-		{"description", u.Description}, {"department", u.Department}, {"title", u.Title}, {"telephoneNumber", u.TelephoneNumber}} {
+	for _, kv := range u.fields() {
 		if kv.v == nil {
 			continue
+		}
+		if len(*kv.v) > maxAttrValue || strings.ContainsFunc(*kv.v, func(r rune) bool { return r < 0x20 }) {
+			return nil, fmt.Errorf("ad: invalid value for %s", kv.Attr)
 		}
 		vals := []string{*kv.v}
 		if *kv.v == "" {
 			vals = nil
 		}
-		attrs = append(attrs, AttrChange{Op: ModReplace, Name: kv.name, Values: vals})
+		attrs = append(attrs, AttrChange{Op: ModReplace, Name: kv.Attr, Values: vals})
 	}
 	if len(attrs) == 0 {
 		return nil, ErrNoChange
@@ -390,22 +427,36 @@ func UpdateUser(dn string, u UserUpdate) (*Operation, error) {
 // assertion on that value, so it fails with ErrConflict if someone changed
 // the account in between instead of silently overwriting their change.
 func SetUserEnabled(u User, enabled bool) (*Operation, error) {
-	if err := checkDN(u.DN); err != nil {
+	return setEnabled(u.DN, "user", u.SAMAccountName, u.UAC, enabled)
+}
+
+// SetComputerEnabled enables or disables a computer account, with the same
+// precondition as SetUserEnabled. Domain controllers are refused: disabling a
+// DC's account breaks replication and sign-in.
+func SetComputerEnabled(c Computer, enabled bool) (*Operation, error) {
+	if c.IsDomainController() {
+		return nil, fmt.Errorf("%w: %s is a domain controller", ErrProtectedObject, c.SAMAccountName)
+	}
+	return setEnabled(c.DN, "computer", c.SAMAccountName, c.UAC, enabled)
+}
+
+func setEnabled(dn, kind, name string, uac UAC, enabled bool) (*Operation, error) {
+	if err := checkDN(dn); err != nil {
 		return nil, err
 	}
-	next := u.UAC | UACAccountDisable
+	next := uac | UACAccountDisable
 	verb := "disable"
 	if enabled {
-		next = u.UAC &^ UACAccountDisable
+		next = uac &^ UACAccountDisable
 		verb = "enable"
 	}
-	if next == u.UAC {
+	if next == uac {
 		return nil, ErrNoChange
 	}
 	return &Operation{preview: Preview{
-		Summary: fmt.Sprintf("%s user %s (%s -> %s)", verb, u.SAMAccountName, u.UAC, next),
-		Changes: []Change{{Type: ChangeModify, DN: u.DN,
-			Assert: escape.Eq("userAccountControl", strconv.FormatUint(uint64(u.UAC), 10)),
+		Summary: fmt.Sprintf("%s %s %s (%s -> %s)", verb, kind, name, uac, next),
+		Changes: []Change{{Type: ChangeModify, DN: dn,
+			Assert: escape.Eq("userAccountControl", strconv.FormatUint(uint64(uac), 10)),
 			Attrs: []AttrChange{
 				{Op: ModReplace, Name: "userAccountControl", Values: []string{strconv.FormatUint(uint64(next), 10)}},
 			}}},
@@ -473,6 +524,29 @@ func MoveObject(dn, newParentDN string) (*Operation, error) {
 	}
 	return &Operation{preview: Preview{Summary: "move object", Changes: []Change{{Type: ChangeModDN, DN: dn, NewRDN: rdn,
 		DeleteOldRDN: true, NewSuperior: newParentDN}}}}, nil
+}
+
+// RenameObject changes the RDN value of an object in place (same parent,
+// same RDN attribute), e.g. renames an OU. For users and groups this changes
+// the CN only, not sAMAccountName.
+func RenameObject(dn, newName string) (*Operation, error) {
+	parsed, err := escape.ParseDN(dn)
+	if err != nil {
+		return nil, err
+	}
+	if len(parsed.RDNs) < 2 || len(parsed.RDNs[0].Attributes) != 1 {
+		return nil, fmt.Errorf("%w: cannot rename %q", escape.ErrInvalidDN, dn)
+	}
+	first := parsed.RDNs[0].Attributes[0]
+	if first.Value == newName {
+		return nil, ErrNoChange
+	}
+	rdn, err := escape.RDN(first.Type, newName)
+	if err != nil {
+		return nil, err
+	}
+	return &Operation{preview: Preview{Summary: fmt.Sprintf("rename %q to %q", first.Value, newName),
+		Changes: []Change{{Type: ChangeModDN, DN: dn, NewRDN: rdn, DeleteOldRDN: true}}}}, nil
 }
 
 // AddGroupMember adds memberDN to the group.

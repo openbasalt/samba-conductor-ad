@@ -50,6 +50,11 @@ type SearchRequest struct {
 	// Limit stops after this many entries (0 = no limit). Enforced on the
 	// client so it works across pages.
 	Limit int
+	// SortBy asks the DC to sort by this attribute (RFC 2891 server-side
+	// sort control, non-critical: a DC that cannot sort returns the entries
+	// unsorted). SortReverse sorts descending.
+	SortBy      string
+	SortReverse bool
 }
 
 // Search runs a paged search (RFC 2696) and streams entries page by page.
@@ -78,10 +83,18 @@ func (c *Conn) Search(ctx context.Context, req SearchRequest) iter.Seq2[*ldap.En
 			size = DefaultPageSize
 		}
 		paging := ldap.NewControlPaging(size)
+		controls := []ldap.Control{paging}
+		if req.SortBy != "" {
+			if !escape.ValidAttribute(req.SortBy) {
+				yield(nil, fmt.Errorf("%w: %q", escape.ErrInvalidAttribute, req.SortBy))
+				return
+			}
+			controls = append(controls, sortControl{attr: req.SortBy, reverse: req.SortReverse})
+		}
 		count := 0
 		for {
 			sr := ldap.NewSearchRequest(base, req.Scope.ldap(), ldap.NeverDerefAliases, 0, 0, false,
-				filter, req.Attributes, []ldap.Control{paging})
+				filter, req.Attributes, controls)
 			var res *ldap.SearchResult
 			err := c.guard(ctx, func() error {
 				var serr error
@@ -136,6 +149,48 @@ func (c *Conn) SearchAll(ctx context.Context, req SearchRequest) ([]*ldap.Entry,
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// Count returns how many entries match the search, reading no attributes
+// (paged like every search).
+func (c *Conn) Count(ctx context.Context, req SearchRequest) (int, error) {
+	req.Attributes = []string{"1.1"}
+	req.SortBy = ""
+	n := 0
+	for _, err := range c.Search(ctx, req) {
+		if err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// SearchWindow returns entries [skip, skip+n) of a search and whether more
+// entries follow, for page-numbered lists in a UI. The DC still pages the
+// result (RFC 2696); the skipped entries are read and dropped on the client,
+// so use it with SortBy and a narrow attribute list.
+func (c *Conn) SearchWindow(ctx context.Context, req SearchRequest, skip, n int) ([]*ldap.Entry, bool, error) {
+	if skip < 0 || n <= 0 {
+		return nil, false, errors.New("ad: invalid window")
+	}
+	req.Limit = skip + n + 1
+	var out []*ldap.Entry
+	i, more := 0, false
+	for e, err := range c.Search(ctx, req) {
+		if err != nil {
+			return nil, false, err
+		}
+		switch {
+		case i < skip:
+		case i < skip+n:
+			out = append(out, e)
+		default:
+			more = true
+		}
+		i++
+	}
+	return out, more, nil
 }
 
 // Get reads one object by DN (base search). ErrNotFound if it does not exist.

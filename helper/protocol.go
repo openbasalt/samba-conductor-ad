@@ -45,6 +45,8 @@ const (
 	OpDomainLevel         OpName = "domain.level.show"
 	OpServiceStatus       OpName = "service.status"
 	OpBackupListArtifacts OpName = "backup.list"
+	OpFSMORoles           OpName = "fsmo.show"
+	OpDCList              OpName = "domain.dcs"
 )
 
 // Caller identifies who asked conductor for the operation; the helper
@@ -148,6 +150,8 @@ var Allowlist = map[OpName]func() Params{
 	OpDomainLevel:         func() Params { return &NoParams{} },
 	OpServiceStatus:       func() Params { return &ServiceStatusParams{} },
 	OpBackupListArtifacts: func() Params { return &NoParams{} },
+	OpFSMORoles:           func() Params { return &NoParams{} },
+	OpDCList:              func() Params { return &NoParams{} },
 }
 
 var idRE = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)

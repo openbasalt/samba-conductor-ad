@@ -159,3 +159,35 @@ func FuzzValidateValue(f *testing.F) {
 		}
 	})
 }
+
+func TestFSMOAndListMembers(t *testing.T) {
+	out := `SchemaMasterRole owner: CN=NTDS Settings,CN=DC1,CN=Servers,CN=Default-First-Site-Name,CN=Sites,CN=Configuration,DC=lab
+InfrastructureMasterRole owner: CN=NTDS Settings,CN=DC1,CN=Servers,CN=Default-First-Site-Name,CN=Sites,CN=Configuration,DC=lab
+PdcEmulationMasterRole owner: CN=NTDS Settings,CN=DC2,CN=Servers,CN=Default-First-Site-Name,CN=Sites,CN=Configuration,DC=lab
+`
+	roles, err := FSMOShow{}.Parse([]byte(out))
+	if err != nil || len(roles) != 3 || roles[2].Role != "PdcEmulationMasterRole" || !strings.Contains(roles[2].Owner, "CN=DC2,") {
+		t.Fatalf("roles %+v %v", roles, err)
+	}
+	if _, err := (FSMOShow{}).Parse([]byte("ERROR: no")); err == nil {
+		t.Error("garbage accepted")
+	}
+	r := &Runner{}
+	p, err := Preview(r, GroupListMembers{Group: "Domain Controllers"})
+	if err != nil || p != "samba-tool group listmembers --full-dn -- 'Domain Controllers'" {
+		t.Fatalf("preview %q %v", p, err)
+	}
+	if _, err := Preview(r, GroupListMembers{Group: "--URL=ldap://evil"}); err == nil {
+		t.Error("option-like group accepted")
+	}
+	if _, err := Preview(r, FSMOShow{URL: "ldap://x; rm"}); err == nil {
+		t.Error("bad URL accepted")
+	}
+	dns, err := GroupListMembers{}.Parse([]byte("CN=DC1,OU=Domain Controllers,DC=lab\nCN=DC2,OU=Domain Controllers,DC=lab\n"))
+	if err != nil || len(dns) != 2 {
+		t.Fatalf("members %v %v", dns, err)
+	}
+	if _, err := (GroupListMembers{}).Parse([]byte("ERROR(ldb): no such group\n")); err == nil {
+		t.Error("error line accepted as a member")
+	}
+}

@@ -187,6 +187,9 @@ var (
 	ErrConflict = errors.New("ad: object changed since it was read")
 	// ErrNoChange: the operation would not change anything.
 	ErrNoChange = errors.New("ad: nothing to change")
+	// ErrProtectedObject: the library refuses to build the operation because
+	// it would break the domain (e.g. disabling a domain controller).
+	ErrProtectedObject = errors.New("ad: protected object")
 )
 
 // classifyWriteError maps LDAP result codes and AD's WERROR prefixes of write

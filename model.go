@@ -103,12 +103,13 @@ var (
 	UserAttributes = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "userPrincipalName",
 		"displayName", "givenName", "sn", "mail", "description", "department", "title", "userAccountControl",
 		"msDS-User-Account-Control-Computed", "pwdLastSet", "lockoutTime", "accountExpires", "lastLogonTimestamp",
-		"memberOf", "primaryGroupID", "whenCreated", "whenChanged"}
+		"memberOf", "primaryGroupID", "whenCreated", "whenChanged", "telephoneNumber", "mobile", "homePhone",
+		"physicalDeliveryOfficeName", "company", "streetAddress", "l", "st", "postalCode", "wWWHomePage"}
 	GroupAttributes = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "cn", "description",
 		"groupType", "mail", "memberOf"}
 	OUAttributes       = []string{"distinguishedName", "objectGUID", "ou", "description", "gPLink"}
 	ComputerAttributes = []string{"distinguishedName", "objectGUID", "objectSid", "sAMAccountName", "dNSHostName",
-		"operatingSystem", "operatingSystemVersion", "userAccountControl", "lastLogonTimestamp", "memberOf"}
+		"operatingSystem", "operatingSystemVersion", "userAccountControl", "lastLogonTimestamp", "memberOf", "description"}
 )
 
 // User is an AD user account.
@@ -125,6 +126,16 @@ type User struct {
 	Description       string
 	Department        string
 	Title             string
+	TelephoneNumber   string
+	Mobile            string
+	HomePhone         string
+	Office            string // physicalDeliveryOfficeName
+	Company           string
+	StreetAddress     string
+	City              string // l
+	State             string // st
+	PostalCode        string
+	HomePage          string // wWWHomePage
 	// UAC is the stored userAccountControl; ComputedUAC adds the computed
 	// LOCKOUT and PASSWORD_EXPIRED bits (msDS-User-Account-Control-Computed).
 	UAC            UAC
@@ -214,10 +225,18 @@ type Computer struct {
 	DNSHostName            string
 	OperatingSystem        string
 	OperatingSystemVersion string
+	Description            string
 	UAC                    UAC
 	LastLogon              FileTime
 	MemberOf               []string
 }
+
+// Enabled reports whether the computer account is not disabled.
+func (c Computer) Enabled() bool { return !c.UAC.Has(UACAccountDisable) }
+
+// IsDomainController reports a DC's account (SERVER_TRUST_ACCOUNT): callers
+// must not disable, move or delete it through generic account management.
+func (c Computer) IsDomainController() bool { return c.UAC.Has(UACServerTrustAccount) }
 
 func attrInt64(e *ldap.Entry, name string) int64 {
 	v, _ := strconv.ParseInt(e.GetAttributeValue(name), 10, 64)
@@ -249,6 +268,16 @@ func UserFromEntry(e *ldap.Entry) User {
 		Description:       e.GetAttributeValue("description"),
 		Department:        e.GetAttributeValue("department"),
 		Title:             e.GetAttributeValue("title"),
+		TelephoneNumber:   e.GetAttributeValue("telephoneNumber"),
+		Mobile:            e.GetAttributeValue("mobile"),
+		HomePhone:         e.GetAttributeValue("homePhone"),
+		Office:            e.GetAttributeValue("physicalDeliveryOfficeName"),
+		Company:           e.GetAttributeValue("company"),
+		StreetAddress:     e.GetAttributeValue("streetAddress"),
+		City:              e.GetAttributeValue("l"),
+		State:             e.GetAttributeValue("st"),
+		PostalCode:        e.GetAttributeValue("postalCode"),
+		HomePage:          e.GetAttributeValue("wWWHomePage"),
 		UAC:               UAC(uint32(attrInt64(e, "userAccountControl"))),
 		ComputedUAC:       UAC(uint32(attrInt64(e, "msDS-User-Account-Control-Computed"))),
 		PwdLastSet:        FileTime(attrInt64(e, "pwdLastSet")),
@@ -291,6 +320,7 @@ func ComputerFromEntry(e *ldap.Entry) Computer {
 		DNSHostName:            e.GetAttributeValue("dNSHostName"),
 		OperatingSystem:        e.GetAttributeValue("operatingSystem"),
 		OperatingSystemVersion: e.GetAttributeValue("operatingSystemVersion"),
+		Description:            e.GetAttributeValue("description"),
 		UAC:                    UAC(uint32(attrInt64(e, "userAccountControl"))),
 		LastLogon:              FileTime(attrInt64(e, "lastLogonTimestamp")),
 		MemberOf:               e.GetAttributeValues("memberOf"),

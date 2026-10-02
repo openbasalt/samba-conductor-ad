@@ -352,3 +352,85 @@ func (DomainBackupOnline) Parse(out []byte) (string, error) {
 	}
 	return string(m[1]), nil
 }
+
+// FSMORole is one operations-master role and the NTDS Settings DN of its
+// owner.
+type FSMORole struct {
+	Role  string // e.g. "SchemaMasterRole", "PdcEmulationMasterRole"
+	Owner string
+}
+
+// FSMOShow lists the FSMO role owners: `samba-tool fsmo show`.
+type FSMOShow struct {
+	// URL of the DC (empty: local sam.ldb).
+	URL string
+}
+
+// Command implements Operation.
+func (o FSMOShow) Command() (Command, error) {
+	c := Command{Subcommand: []string{"fsmo", "show"}}
+	if o.URL != "" {
+		if !urlRE.MatchString(o.URL) {
+			return Command{}, fmt.Errorf("sambatool: invalid URL %q", o.URL)
+		}
+		c.Options = append(c.Options, "--URL="+o.URL)
+	}
+	return c, nil
+}
+
+var fsmoRE = regexp.MustCompile(`(?m)^([A-Za-z]+Role) owner: (.+?)\s*$`)
+
+// Parse implements Operation.
+func (FSMOShow) Parse(out []byte) ([]FSMORole, error) {
+	var roles []FSMORole
+	for _, m := range fsmoRE.FindAllStringSubmatch(string(out), -1) {
+		roles = append(roles, FSMORole{Role: m[1], Owner: m[2]})
+	}
+	if len(roles) == 0 {
+		return nil, fmt.Errorf("sambatool: no FSMO roles in output %q", strings.TrimSpace(string(out)))
+	}
+	return roles, nil
+}
+
+// GroupListMembers lists the direct members of a group by DN:
+// `samba-tool group listmembers --full-dn -- GROUP`.
+type GroupListMembers struct {
+	Group string // sAMAccountName of the group
+	// URL of the DC (empty: local sam.ldb).
+	URL string
+}
+
+// Command implements Operation.
+func (o GroupListMembers) Command() (Command, error) {
+	if err := ValidateValue(o.Group); err != nil {
+		return Command{}, err
+	}
+	if len(o.Group) > 256 {
+		return Command{}, errors.New("sambatool: group name too long")
+	}
+	c := Command{Subcommand: []string{"group", "listmembers"}, Options: []string{"--full-dn"}, Args: []string{o.Group}}
+	if o.URL != "" {
+		if !urlRE.MatchString(o.URL) {
+			return Command{}, fmt.Errorf("sambatool: invalid URL %q", o.URL)
+		}
+		c.Options = append(c.Options, "--URL="+o.URL)
+	}
+	return c, nil
+}
+
+// Parse implements Operation: one DN per line.
+func (GroupListMembers) Parse(out []byte) ([]string, error) {
+	var dns []string
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if !strings.Contains(line, "=") {
+			return nil, fmt.Errorf("sambatool: unexpected listmembers line %q", line)
+		}
+		dns = append(dns, line)
+	}
+	return dns, sc.Err()
+}

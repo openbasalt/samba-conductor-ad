@@ -95,3 +95,24 @@ func TestLabDNSWithPasswordFD(t *testing.T) {
 		t.Fatal("record still present")
 	}
 }
+
+func TestLabFSMOAndDCs(t *testing.T) {
+	r, _ := labRunner(t, false)
+	p, _ := Preview(r, FSMOShow{})
+	t.Logf("$ %s", p)
+	roles, err := Run(context.Background(), r, FSMOShow{})
+	if err != nil || len(roles) < 5 {
+		t.Fatalf("fsmo %+v %v", roles, err)
+	}
+	for _, x := range roles {
+		t.Logf("%s: %s", x.Role, x.Owner)
+	}
+	op := GroupListMembers{Group: "Domain Controllers"}
+	p, _ = Preview(r, op)
+	t.Logf("$ %s", p)
+	dcs, err := Run(context.Background(), r, op)
+	if err != nil || len(dcs) != 2 {
+		t.Fatalf("dcs %v %v", dcs, err)
+	}
+	t.Logf("DCs: %v", dcs)
+}
