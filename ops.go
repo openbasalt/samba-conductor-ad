@@ -172,6 +172,18 @@ func writeLDIFValue(sb *strings.Builder, name, v string) {
 // a connection bound as the user.
 type Operation struct {
 	preview Preview
+	// dcs, when set, are the DCs (DNS host names) the operation is written
+	// on, each one, instead of a single connection's DC (see ApplyOnDCs).
+	dcs []string
+}
+
+// DCs returns the DC host names an operation built for every DC is written
+// on, or nil for an ordinary single-connection operation.
+func (o *Operation) DCs() []string {
+	if o == nil || len(o.dcs) == 0 {
+		return nil
+	}
+	return append([]string(nil), o.dcs...)
 }
 
 // Preview returns the exact changes the operation will send.
@@ -500,6 +512,57 @@ func UnlockUser(dn string) (*Operation, error) {
 	}
 	return &Operation{preview: Preview{Summary: "unlock user", Changes: []Change{{Type: ChangeModify, DN: dn,
 		Attrs: []AttrChange{{Op: ModReplace, Name: "lockoutTime", Values: []string{"0"}}}}}}}, nil
+}
+
+// UnlockUserOnDCs is UnlockUser for every DC in hosts: lockoutTime = 0 is
+// written on each of them (apply with ApplyOnDCs). lockoutTime replicates
+// with a delay and a DC that still holds the old value would keep the
+// account locked for the clients that ask it, so the unlock is not left to
+// replication. A zero lockoutTime also clears the DC's bad-password
+// counter in Samba; badPwdCount itself is system-only and never written.
+func UnlockUserOnDCs(dn string, hosts []string) (*Operation, error) {
+	op, err := UnlockUser(dn)
+	if err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("%w: no domain controller to unlock on", ErrInvalid)
+	}
+	op.dcs = append([]string(nil), hosts...)
+	op.preview.Summary = "unlock user on every domain controller"
+	op.preview.Changes[0].Notes = []string{"written on each of: " + strings.Join(hosts, ", ") +
+		" (lockoutTime replicates with a delay, so no DC is left to replication)"}
+	return op, nil
+}
+
+// DCResult is the outcome of an operation on one DC.
+type DCResult struct {
+	Host string
+	Err  error // nil = applied
+}
+
+// ApplyOnDCs applies op on each of its DCs through connect (a connection
+// bound as the user to that DC) and reports every DC: an unreachable or
+// failing DC is a result with its error, never silently skipped. A DC is
+// tried even when an earlier one failed. An operation without DCs is
+// applied on connect(ctx, "") (the default DC) as a single result.
+func ApplyOnDCs(ctx context.Context, op *Operation, connect func(ctx context.Context, host string) (*Conn, error)) []DCResult {
+	hosts := op.DCs()
+	if len(hosts) == 0 {
+		hosts = []string{""}
+	}
+	out := make([]DCResult, 0, len(hosts))
+	for _, h := range hosts {
+		r := DCResult{Host: h}
+		conn, err := connect(ctx, h)
+		if err == nil {
+			err = conn.Apply(ctx, op)
+			_ = conn.Close()
+		}
+		r.Err = err
+		out = append(out, r)
+	}
+	return out
 }
 
 // ResetPassword is the administrative reset: it replaces the password
