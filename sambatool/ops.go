@@ -1,0 +1,354 @@
+package sambatool
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/netip"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// DNSRecordType is an allowlisted DNS record type.
+type DNSRecordType string
+
+// Supported record types.
+const (
+	DNSTypeA     DNSRecordType = "A"
+	DNSTypeAAAA  DNSRecordType = "AAAA"
+	DNSTypeCNAME DNSRecordType = "CNAME"
+	DNSTypePTR   DNSRecordType = "PTR"
+	DNSTypeTXT   DNSRecordType = "TXT"
+	DNSTypeMX    DNSRecordType = "MX"
+	DNSTypeSRV   DNSRecordType = "SRV"
+	DNSTypeNS    DNSRecordType = "NS"
+	DNSTypeALL   DNSRecordType = "ALL" // query only
+)
+
+func (t DNSRecordType) valid(forQuery bool) bool {
+	switch t {
+	case DNSTypeA, DNSTypeAAAA, DNSTypeCNAME, DNSTypePTR, DNSTypeTXT, DNSTypeMX, DNSTypeSRV, DNSTypeNS:
+		return true
+	case DNSTypeALL:
+		return forQuery
+	}
+	return false
+}
+
+// validateRecordData checks the data of a record against its type.
+func validateRecordData(t DNSRecordType, data string) error {
+	if err := ValidateValue(data); err != nil {
+		return err
+	}
+	switch t {
+	case DNSTypeA:
+		if a, err := netip.ParseAddr(data); err != nil || !a.Is4() {
+			return fmt.Errorf("sambatool: %q is not an IPv4 address", data)
+		}
+	case DNSTypeAAAA:
+		if a, err := netip.ParseAddr(data); err != nil || !a.Is6() {
+			return fmt.Errorf("sambatool: %q is not an IPv6 address", data)
+		}
+	case DNSTypeCNAME, DNSTypePTR, DNSTypeNS:
+		if !validDNSName(data) {
+			return fmt.Errorf("sambatool: %q is not a DNS name", data)
+		}
+	case DNSTypeMX:
+		host, pref, ok := strings.Cut(data, " ")
+		if _, err := strconv.ParseUint(pref, 10, 16); !ok || err != nil || !validDNSName(host) {
+			return fmt.Errorf("sambatool: MX data must be \"host preference\", got %q", data)
+		}
+	case DNSTypeSRV:
+		f := strings.Fields(data)
+		if len(f) != 4 || !validDNSName(f[0]) {
+			return fmt.Errorf("sambatool: SRV data must be \"target port priority weight\", got %q", data)
+		}
+		for _, n := range f[1:] {
+			if _, err := strconv.ParseUint(n, 10, 16); err != nil {
+				return fmt.Errorf("sambatool: SRV data must be \"target port priority weight\", got %q", data)
+			}
+		}
+	case DNSTypeTXT:
+		if len(data) > 255 {
+			return errors.New("sambatool: TXT data longer than 255")
+		}
+	}
+	return nil
+}
+
+func checkServerZone(server, zone string) error {
+	if !validServer(server) {
+		return fmt.Errorf("sambatool: invalid DNS server %q", server)
+	}
+	if zone == "@" || !validDNSName(zone) {
+		return fmt.Errorf("sambatool: invalid zone %q", zone)
+	}
+	return nil
+}
+
+// DNSZoneList lists the zones served by a DC: `samba-tool dns zonelist`.
+type DNSZoneList struct{ Server string }
+
+// Command implements Operation.
+func (o DNSZoneList) Command() (Command, error) {
+	if !validServer(o.Server) {
+		return Command{}, fmt.Errorf("sambatool: invalid DNS server %q", o.Server)
+	}
+	return Command{Subcommand: []string{"dns", "zonelist"}, Args: []string{o.Server}}, nil
+}
+
+var zoneNameRE = regexp.MustCompile(`(?m)^\s*pszZoneName\s*:\s*(\S+)\s*$`)
+
+// Parse implements Operation.
+func (DNSZoneList) Parse(out []byte) ([]string, error) {
+	var zones []string
+	for _, m := range zoneNameRE.FindAllSubmatch(out, -1) {
+		zones = append(zones, string(m[1]))
+	}
+	return zones, nil
+}
+
+// DNSRecord is one record from a query.
+type DNSRecord struct {
+	Name  string // relative to the zone; "" is the apex
+	Type  string
+	Data  string
+	TTL   uint32
+	Flags string
+}
+
+// DNSQuery queries records: `samba-tool dns query`.
+type DNSQuery struct {
+	Server, Zone, Name string
+	Type               DNSRecordType
+}
+
+// Command implements Operation.
+func (o DNSQuery) Command() (Command, error) {
+	if err := checkServerZone(o.Server, o.Zone); err != nil {
+		return Command{}, err
+	}
+	if !validDNSName(o.Name) {
+		return Command{}, fmt.Errorf("sambatool: invalid record name %q", o.Name)
+	}
+	if !o.Type.valid(true) {
+		return Command{}, fmt.Errorf("sambatool: record type %q not allowed", o.Type)
+	}
+	return Command{Subcommand: []string{"dns", "query"}, Args: []string{o.Server, o.Zone, o.Name, string(o.Type)}}, nil
+}
+
+var (
+	queryNameRE   = regexp.MustCompile(`^\s*Name=([^,]*), Records=\d+, Children=\d+`)
+	queryRecordRE = regexp.MustCompile(`^\s+([A-Z]+): (.*?)(?: \(flags=([0-9a-fA-F]+), serial=\d+, ttl=(\d+)\))?\s*$`)
+)
+
+// Parse implements Operation.
+func (DNSQuery) Parse(out []byte) ([]DNSRecord, error) {
+	var recs []DNSRecord
+	name := ""
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := sc.Text()
+		if m := queryNameRE.FindStringSubmatch(line); m != nil {
+			name = m[1]
+			continue
+		}
+		if m := queryRecordRE.FindStringSubmatch(line); m != nil {
+			ttl, _ := strconv.ParseUint(m[4], 10, 32)
+			recs = append(recs, DNSRecord{Name: name, Type: m[1], Data: m[2], TTL: uint32(ttl), Flags: m[3]})
+		}
+	}
+	return recs, sc.Err()
+}
+
+// DNSAddRecord adds a record: `samba-tool dns add`.
+type DNSAddRecord struct {
+	Server, Zone, Name string
+	Type               DNSRecordType
+	Data               string
+}
+
+// Command implements Operation.
+func (o DNSAddRecord) Command() (Command, error) {
+	return recordCommand("add", o.Server, o.Zone, o.Name, o.Type, o.Data)
+}
+
+// Parse implements Operation.
+func (DNSAddRecord) Parse(out []byte) (struct{}, error) {
+	return struct{}{}, expectOutput(out, "Record added successfully")
+}
+
+// DNSDeleteRecord deletes a record: `samba-tool dns delete`.
+type DNSDeleteRecord struct {
+	Server, Zone, Name string
+	Type               DNSRecordType
+	Data               string
+}
+
+// Command implements Operation.
+func (o DNSDeleteRecord) Command() (Command, error) {
+	return recordCommand("delete", o.Server, o.Zone, o.Name, o.Type, o.Data)
+}
+
+// Parse implements Operation.
+func (DNSDeleteRecord) Parse(out []byte) (struct{}, error) {
+	return struct{}{}, expectOutput(out, "Record deleted successfully")
+}
+
+func recordCommand(verb, server, zone, name string, t DNSRecordType, data string) (Command, error) {
+	if err := checkServerZone(server, zone); err != nil {
+		return Command{}, err
+	}
+	if !validDNSName(name) {
+		return Command{}, fmt.Errorf("sambatool: invalid record name %q", name)
+	}
+	if !t.valid(false) {
+		return Command{}, fmt.Errorf("sambatool: record type %q not allowed", t)
+	}
+	if err := validateRecordData(t, data); err != nil {
+		return Command{}, err
+	}
+	return Command{Subcommand: []string{"dns", verb}, Args: []string{server, zone, name, string(t), data}}, nil
+}
+
+func expectOutput(out []byte, want string) error {
+	if !bytes.Contains(out, []byte(want)) {
+		return fmt.Errorf("sambatool: unexpected output: %q", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// DomainLevel is the output of `samba-tool domain level show`.
+type DomainLevel struct {
+	Forest, Domain, LowestDC string
+}
+
+// DomainLevelShow reads the functional levels: `samba-tool domain level show`.
+type DomainLevelShow struct {
+	// URL of the DC, e.g. "ldap://dc1.lab.example" (empty: local sam.ldb).
+	URL string
+}
+
+var urlRE = regexp.MustCompile(`^(ldaps?|tdb)://[A-Za-z0-9._/-]+$`)
+
+// Command implements Operation.
+func (o DomainLevelShow) Command() (Command, error) {
+	c := Command{Subcommand: []string{"domain", "level", "show"}}
+	if o.URL != "" {
+		if !urlRE.MatchString(o.URL) {
+			return Command{}, fmt.Errorf("sambatool: invalid URL %q", o.URL)
+		}
+		c.Options = append(c.Options, "--URL="+o.URL)
+	}
+	return c, nil
+}
+
+var levelRE = regexp.MustCompile(`(?m)^(Forest|Domain) function level: (.+?)\s*$|^Lowest function level of a DC: (.+?)\s*$`)
+
+// Parse implements Operation.
+func (DomainLevelShow) Parse(out []byte) (DomainLevel, error) {
+	var l DomainLevel
+	for _, m := range levelRE.FindAllStringSubmatch(string(out), -1) {
+		switch {
+		case m[1] == "Forest":
+			l.Forest = m[2]
+		case m[1] == "Domain":
+			l.Domain = m[2]
+		case m[3] != "":
+			l.LowestDC = m[3]
+		}
+	}
+	if l.Domain == "" {
+		return l, fmt.Errorf("sambatool: no domain level in output %q", strings.TrimSpace(string(out)))
+	}
+	return l, nil
+}
+
+// ReplicationStatus is the parsed `samba-tool drs showrepl --json`.
+type ReplicationStatus struct {
+	Server   string        `json:"server"`
+	Site     string        `json:"site"`
+	RepsFrom []Replication `json:"repsFrom"`
+	RepsTo   []Replication `json:"repsTo"`
+}
+
+// Replication is one naming context link with a partner DC.
+type Replication struct {
+	NamingContext       string `json:"NC dn"`
+	DSA                 string `json:"DSA"`
+	LastAttempt         string `json:"last attempt time"`
+	LastAttemptMessage  string `json:"last attempt message"`
+	LastSuccess         string `json:"last success"`
+	ConsecutiveFailures int    `json:"consecutive failures"`
+	IsDeleted           bool   `json:"is deleted"`
+}
+
+// Healthy reports whether every inbound link succeeded on its last attempt.
+func (r ReplicationStatus) Healthy() bool {
+	for _, l := range r.RepsFrom {
+		if l.ConsecutiveFailures > 0 {
+			return false
+		}
+	}
+	return len(r.RepsFrom) > 0
+}
+
+// DRSShowRepl reads the replication status of a DC (default: local).
+type DRSShowRepl struct{ DC string }
+
+// Command implements Operation.
+func (o DRSShowRepl) Command() (Command, error) {
+	c := Command{Subcommand: []string{"drs", "showrepl"}, Options: []string{"--json"}}
+	if o.DC != "" {
+		if !validServer(o.DC) {
+			return Command{}, fmt.Errorf("sambatool: invalid DC %q", o.DC)
+		}
+		c.Args = []string{o.DC}
+	}
+	return c, nil
+}
+
+// Parse implements Operation.
+func (DRSShowRepl) Parse(out []byte) (ReplicationStatus, error) {
+	var r ReplicationStatus
+	if err := json.Unmarshal(out, &r); err != nil {
+		return r, fmt.Errorf("sambatool: decoding showrepl JSON: %w", err)
+	}
+	return r, nil
+}
+
+// DomainBackupOnline takes an online backup from a DC:
+// `samba-tool domain backup online --server=DC --targetdir=DIR`. The result is
+// the path of the backup file. Run it from the privileged helper (P3).
+type DomainBackupOnline struct {
+	Server    string
+	TargetDir string // absolute, simple characters only
+}
+
+var pathRE = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+
+// Command implements Operation.
+func (o DomainBackupOnline) Command() (Command, error) {
+	if !validServer(o.Server) || strings.HasPrefix(o.Server, "-") {
+		return Command{}, fmt.Errorf("sambatool: invalid server %q", o.Server)
+	}
+	if !pathRE.MatchString(o.TargetDir) || strings.Contains(o.TargetDir, "..") {
+		return Command{}, fmt.Errorf("sambatool: invalid target directory %q", o.TargetDir)
+	}
+	return Command{Subcommand: []string{"domain", "backup", "online"},
+		Options: []string{"--server=" + o.Server, "--targetdir=" + o.TargetDir}}, nil
+}
+
+var backupFileRE = regexp.MustCompile(`(?m)(/\S+\.tar\.bz2)`)
+
+// Parse implements Operation.
+func (DomainBackupOnline) Parse(out []byte) (string, error) {
+	m := backupFileRE.FindSubmatch(out)
+	if m == nil {
+		return "", fmt.Errorf("sambatool: backup file not reported: %q", strings.TrimSpace(string(out)))
+	}
+	return string(m[1]), nil
+}
