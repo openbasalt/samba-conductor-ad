@@ -1,7 +1,8 @@
 // Package helper defines the protocol between conductor (unprivileged) and
 // conductor-helper (root, local only) for the few operations that need root
 // on the DC. Only types, validation and framing live here; the helper binary
-// is built in the conductor repository (P1/P3).
+// is built in the conductor repository (P1/P3). The P3 backup operations,
+// their parameters and the status document are in backup.go.
 //
 // Transport: a Unix stream socket (default DefaultSocketPath, mode 0660,
 // group conductor), peer identity checked with SO_PEERCRED by the helper.
@@ -28,8 +29,12 @@ import (
 // ProtocolVersion is bumped on incompatible changes.
 const ProtocolVersion = 1
 
-// DefaultSocketPath is where conductor-helper listens.
+// DefaultSocketPath is where conductor-helper listens for conductor.
 const DefaultSocketPath = "/run/conductor-helper/helper.sock"
+
+// DefaultBackupSocketPath is where conductor-helper listens for
+// conductor-backup (only when backups are configured).
+const DefaultBackupSocketPath = "/run/conductor-helper/backup.sock"
 
 // MaxMessageSize bounds one framed message.
 const MaxMessageSize = 64 << 10
@@ -110,8 +115,9 @@ type NoParams struct{}
 func (NoParams) Validate() error { return nil }
 
 // BackupOnlineParams asks for an online domain backup. The helper chooses
-// the target directory from its own configuration; the caller may only pick
-// a label that becomes part of the file name.
+// the work and spool directories, the backup account and the recipients
+// from its own configuration; the caller only labels the run ("scheduled"
+// or "manual"), which goes to the helper's log.
 type BackupOnlineParams struct {
 	Label string `json:"label"`
 }
@@ -152,6 +158,9 @@ var Allowlist = map[OpName]func() Params{
 	OpBackupListArtifacts: func() Params { return &NoParams{} },
 	OpFSMORoles:           func() Params { return &NoParams{} },
 	OpDCList:              func() Params { return &NoParams{} },
+	OpBackupStatus:        func() Params { return &NoParams{} },
+	OpBackupTrigger:       func() Params { return &BackupTriggerParams{} },
+	OpBackupPolicySet:     func() Params { return &BackupPolicy{} },
 }
 
 var idRE = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)

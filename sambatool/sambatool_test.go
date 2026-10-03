@@ -225,3 +225,61 @@ func TestGPOOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupRestoreAndProbeOps(t *testing.T) {
+	local := &Runner{}
+	got, err := Preview(local, DomainBackupRestore{BackupFile: "/var/lib/drill/w/samba.tar.bz2", TargetDir: "/var/lib/drill/w/restore",
+		NewServerName: "DRILL1", HostIP: "192.0.2.10"})
+	want := "samba-tool domain backup restore --backup-file=/var/lib/drill/w/samba.tar.bz2 --targetdir=/var/lib/drill/w/restore --newservername=DRILL1 --host-ip=192.0.2.10"
+	if err != nil || got != want {
+		t.Fatalf("restore preview %q %v", got, err)
+	}
+	for _, bad := range []DomainBackupRestore{
+		{BackupFile: "rel/x.tar.bz2", TargetDir: "/t", NewServerName: "DC1"},
+		{BackupFile: "/x/../y", TargetDir: "/t", NewServerName: "DC1"},
+		{BackupFile: "/x", TargetDir: "/t", NewServerName: "-x"},
+		{BackupFile: "/x", TargetDir: "/t", NewServerName: "THIS-NAME-IS-TOO-LONG"},
+		{BackupFile: "/x", TargetDir: "/t", NewServerName: "DC1", HostIP: "::1"},
+		{BackupFile: "/x y", TargetDir: "/t", NewServerName: "DC1"},
+	} {
+		if _, err := bad.Command(); err == nil {
+			t.Errorf("restore %+v accepted", bad)
+		}
+	}
+	if _, err := (DomainBackupRestore{}).Parse([]byte("…\nBackup file successfully restored to /t\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (DomainBackupRestore{}).Parse([]byte("ERROR")); err == nil {
+		t.Fatal("failed restore accepted")
+	}
+	if f, err := (DomainBackupOnline{}).Parse([]byte("")); err != nil || f != "" {
+		t.Fatalf("backup online without stdout: %q %v", f, err)
+	}
+
+	probe := &Runner{Credentials: Password{Username: "svc-drill-probe", Password: "pw"}}
+	got, err = Preview(probe, UserList{URL: "ldap://127.0.0.1"})
+	if err != nil || got != "samba-tool user list --URL=ldap://127.0.0.1 --use-kerberos=off -U svc-drill-probe" {
+		t.Fatalf("user list preview %q %v", got, err)
+	}
+	names, _ := UserList{}.Parse([]byte("Administrator\n\nkrbtgt\n  user0001\n"))
+	if len(names) != 3 || names[2] != "user0001" {
+		t.Fatalf("user list parse %v", names)
+	}
+	got, err = Preview(probe, ObjectSID{Kind: KindGroup, Name: "Domain Admins", URL: "ldap://127.0.0.1"})
+	if err != nil || got != "samba-tool group show --attributes=objectSid --URL=ldap://127.0.0.1 --use-kerberos=off -U svc-drill-probe -- 'Domain Admins'" {
+		t.Fatalf("group show preview %q %v", got, err)
+	}
+	s, err := ObjectSID{}.Parse([]byte("dn: CN=Domain Admins,CN=Users,DC=lab\nobjectSid: S-1-5-21-1-2-3-512\n"))
+	if err != nil || s != "S-1-5-21-1-2-3-512" {
+		t.Fatalf("sid parse %q %v", s, err)
+	}
+	for _, bad := range []ObjectSID{{Kind: "computer", Name: "x", URL: "ldap://h"}, {Kind: KindUser, Name: "-x", URL: "ldap://h"},
+		{Kind: KindUser, Name: "x", URL: "tdb:///var/lib/samba/private/sam.ldb"}, {Kind: KindUser, Name: "x", URL: "ldap://h/x"}} {
+		if _, err := bad.Command(); err == nil {
+			t.Errorf("object sid %+v accepted", bad)
+		}
+	}
+	if _, err := (UserList{URL: "ldap://h -H x"}).Command(); err == nil {
+		t.Error("bad user list URL accepted")
+	}
+}

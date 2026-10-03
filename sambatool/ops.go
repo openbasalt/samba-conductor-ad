@@ -322,7 +322,10 @@ func (DRSShowRepl) Parse(out []byte) (ReplicationStatus, error) {
 
 // DomainBackupOnline takes an online backup from a DC:
 // `samba-tool domain backup online --server=DC --targetdir=DIR`. The result is
-// the path of the backup file. Run it from the privileged helper (P3).
+// the path of the backup file when samba-tool reports it on stdout (it
+// usually logs to stderr, so callers should give it an empty target
+// directory and look for the one samba-backup-*.tar.bz2 file there). Run
+// it from the privileged helper with the backup account's credentials.
 type DomainBackupOnline struct {
 	Server    string
 	TargetDir string // absolute, simple characters only
@@ -344,11 +347,140 @@ func (o DomainBackupOnline) Command() (Command, error) {
 
 var backupFileRE = regexp.MustCompile(`(?m)(/\S+\.tar\.bz2)`)
 
-// Parse implements Operation.
+// Parse implements Operation: the reported backup file, or "" when stdout
+// does not name it (the caller then looks in the target directory).
 func (DomainBackupOnline) Parse(out []byte) (string, error) {
 	m := backupFileRE.FindSubmatch(out)
 	if m == nil {
-		return "", fmt.Errorf("sambatool: backup file not reported: %q", strings.TrimSpace(string(out)))
+		return "", nil
+	}
+	return string(m[1]), nil
+}
+
+// netbiosRE is a NetBIOS computer name (what --newservername takes).
+var netbiosRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,14}$`)
+
+// DomainBackupRestore restores a backup file into a new DC database:
+// `samba-tool domain backup restore --backup-file=F --targetdir=D
+// --newservername=N [--host-ip=IP]`. The original SIDs and GUIDs are kept;
+// the old DCs are removed from the restored database and every FSMO role is
+// seized by the new one. Runs as root on the host that becomes the DC (or
+// in a restore drill's sandbox). TargetDir must not exist or be empty.
+type DomainBackupRestore struct {
+	BackupFile    string
+	TargetDir     string
+	NewServerName string
+	// HostIP is optional (only used by samba for renamed-domain backups).
+	HostIP string
+}
+
+// Command implements Operation.
+func (o DomainBackupRestore) Command() (Command, error) {
+	for _, p := range []string{o.BackupFile, o.TargetDir} {
+		if !pathRE.MatchString(p) || strings.Contains(p, "..") {
+			return Command{}, fmt.Errorf("sambatool: invalid path %q", p)
+		}
+	}
+	if !netbiosRE.MatchString(o.NewServerName) {
+		return Command{}, fmt.Errorf("sambatool: invalid server name %q", o.NewServerName)
+	}
+	c := Command{Subcommand: []string{"domain", "backup", "restore"},
+		Options: []string{"--backup-file=" + o.BackupFile, "--targetdir=" + o.TargetDir, "--newservername=" + o.NewServerName}}
+	if o.HostIP != "" {
+		ip, err := netip.ParseAddr(o.HostIP)
+		if err != nil || !ip.Is4() {
+			return Command{}, fmt.Errorf("sambatool: invalid IPv4 address %q", o.HostIP)
+		}
+		c.Options = append(c.Options, "--host-ip="+ip.String())
+	}
+	return c, nil
+}
+
+// Parse implements Operation: samba-tool ends with "Backup file
+// successfully restored to …" (stdout).
+func (DomainBackupRestore) Parse(out []byte) (struct{}, error) {
+	return struct{}{}, expectOutput(out, "successfully restored")
+}
+
+// checkLDAPURL accepts only ldap:// or ldaps:// URLs of a host (no path).
+func checkLDAPURL(u string) error {
+	if !urlRE.MatchString(u) || !(strings.HasPrefix(u, "ldap://") || strings.HasPrefix(u, "ldaps://")) ||
+		strings.Count(u, "/") != 2 {
+		return fmt.Errorf("sambatool: invalid LDAP URL %q", u)
+	}
+	return nil
+}
+
+// UserList lists the sAMAccountName of every normal user account
+// (userAccountControl NORMAL_ACCOUNT, disabled ones included):
+// `samba-tool user list --URL=URL`. Used by restore drills to count users
+// over LDAP with the probe account's credentials.
+type UserList struct {
+	URL string // ldap://host
+}
+
+// Command implements Operation.
+func (o UserList) Command() (Command, error) {
+	if err := checkLDAPURL(o.URL); err != nil {
+		return Command{}, err
+	}
+	return Command{Subcommand: []string{"user", "list"}, Options: []string{"--URL=" + o.URL}}, nil
+}
+
+// Parse implements Operation: one name per line.
+func (UserList) Parse(out []byte) ([]string, error) {
+	var names []string
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, sc.Err()
+}
+
+// ObjectKind selects `samba-tool user show` or `samba-tool group show`.
+type ObjectKind string
+
+// Object kinds for ObjectSID.
+const (
+	KindUser  ObjectKind = "user"
+	KindGroup ObjectKind = "group"
+)
+
+// ObjectSID reads the objectSid of a user or group by sAMAccountName:
+// `samba-tool user|group show --attributes=objectSid --URL=URL -- NAME`.
+type ObjectSID struct {
+	Kind ObjectKind
+	Name string
+	URL  string // ldap://host
+}
+
+// Command implements Operation.
+func (o ObjectSID) Command() (Command, error) {
+	if o.Kind != KindUser && o.Kind != KindGroup {
+		return Command{}, fmt.Errorf("sambatool: invalid object kind %q", o.Kind)
+	}
+	if err := ValidateValue(o.Name); err != nil {
+		return Command{}, err
+	}
+	if len(o.Name) > 256 {
+		return Command{}, errors.New("sambatool: name too long")
+	}
+	if err := checkLDAPURL(o.URL); err != nil {
+		return Command{}, err
+	}
+	return Command{Subcommand: []string{string(o.Kind), "show"}, Options: []string{"--attributes=objectSid", "--URL=" + o.URL},
+		Args: []string{o.Name}}, nil
+}
+
+var objectSIDRE = regexp.MustCompile(`(?m)^objectSid: (S-1-[0-9-]+)\s*$`)
+
+// Parse implements Operation.
+func (ObjectSID) Parse(out []byte) (string, error) {
+	m := objectSIDRE.FindSubmatch(out)
+	if m == nil {
+		return "", errors.New("sambatool: no objectSid in output")
 	}
 	return string(m[1]), nil
 }
