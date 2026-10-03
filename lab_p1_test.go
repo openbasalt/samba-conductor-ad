@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 // userConn signs a seeded user in with Kerberos and binds.

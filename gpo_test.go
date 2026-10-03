@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 const (

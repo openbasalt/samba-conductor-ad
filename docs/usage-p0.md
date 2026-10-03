@@ -1,6 +1,6 @@
 # P0 lab integration run
 
-Transcript of `make lab-test` (`scripts/lab-test.sh`) against the server-home
+Transcript of `make lab-test` (`scripts/lab-test.sh`) against the
 lab (`../../planning/docs/lab.md`), run on 2026-10-01 right after
 `planning/lab/reset.sh` restored the `seeded` snapshot. No secrets appear: the
 tests never log passwords, and the transcript was checked against the lab's
@@ -24,7 +24,7 @@ What the run covers (spec `planning/docs/p0-spec.md` §2):
 | `TestLabDomainLevel`, `TestLabReplication`, `TestLabDNSWithPasswordFD` (on dc1) | Typed samba-tool operations, exact command preview, password via `PASSWD_FD` |
 
 ```text
-=== ad package (on server-home, Go test binary)
+=== ad package (on the lab host, Go test binary)
     lab_test.go:101: DCs (dc2 preferred): [{Host:dc2.lab.conductor.test Priority:0 Weight:100} {Host:dc1.lab.conductor.test Priority:0 Weight:100}]
 --- PASS: TestLabDiscovery (0.00s)
     lab_test.go:119: principal user0001@LAB.CONDUCTOR.TEST, TGT valid until 2026-10-02T12:41:36Z

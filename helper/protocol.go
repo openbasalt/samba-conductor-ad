@@ -23,7 +23,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/samba-conductor/ad/sid"
+	"github.com/openbasalt/samba-conductor-ad/sid"
 )
 
 // ProtocolVersion is bumped on incompatible changes.

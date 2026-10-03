@@ -1,6 +1,9 @@
-# Quality gates for the ad library. GOWORK=off: the module is checked on its
-# own, not through the family go.work.
-export GOWORK := off
+# Quality gates for the ad library.
+# GOWORK=off by default: the module is checked on its own, against the
+# versions go.mod pins (what CI and release builds use), not through a
+# family go.work; `make check GOWORK=$PWD/../go.work` checks it against
+# local copies of the sibling modules instead.
+export GOWORK ?= off
 GOBIN := $(shell go env GOPATH)/bin
 STATICCHECK := $(GOBIN)/staticcheck
 GOVULNCHECK := $(GOBIN)/govulncheck
@@ -11,7 +14,7 @@ FUZZTIME ?= 20s
 test:
 	go test -race ./...
 
-# Integration tests against the server-home lab (planning/docs/lab.md).
+# Integration tests against the lab (planning/docs/lab.md).
 # LAB_HOST=local when running on the lab host itself; RUN=<regexp> to filter.
 lab-test:
 	./scripts/lab-test.sh

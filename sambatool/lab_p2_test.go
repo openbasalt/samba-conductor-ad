@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samba-conductor/ad"
-	"github.com/samba-conductor/ad/sambatool"
+	ad "github.com/openbasalt/samba-conductor-ad"
+	"github.com/openbasalt/samba-conductor-ad/sambatool"
 )
 
 // TestLabGPOWithUserCCache creates and deletes a GPO with samba-tool using

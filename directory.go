@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"iter"
 
-	"github.com/samba-conductor/ad/escape"
-	"github.com/samba-conductor/ad/sid"
+	"github.com/openbasalt/samba-conductor-ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/sid"
 )
 
 var (

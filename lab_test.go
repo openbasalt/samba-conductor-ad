@@ -1,7 +1,7 @@
 //go:build lab
 
 // Integration tests against the Samba lab (planning/docs/lab.md). They run
-// on server-home (or anywhere that reaches the lab network) with:
+// on the lab host (or anywhere that reaches the lab network) with:
 //
 //	AD_LAB_REALM, AD_LAB_DNS (comma-separated DC IPs), AD_LAB_CA (CA PEM path),
 //	AD_LAB_ADMIN_USER / AD_LAB_ADMIN_PASSWORD (a Domain Admin),
@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad/escape"
-	"github.com/samba-conductor/ad/sid"
+	"github.com/openbasalt/samba-conductor-ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/sid"
 )
 
 func labEnv(t *testing.T, name string) string {

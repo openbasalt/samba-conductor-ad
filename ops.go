@@ -10,7 +10,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 // ChangeType is the kind of one LDAP write.

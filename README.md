@@ -5,8 +5,16 @@ later by `tui-dc`. Pure library: no global state, `context.Context` on every
 network call, typed errors. Design: `../planning/docs/architecture.md` (§4, §5,
 §8) and `../planning/docs/p0-spec.md`.
 
-Module `github.com/samba-conductor/ad` (tentative path; local only for now).
-Go 1.27.
+Module `github.com/openbasalt/samba-conductor-ad` (the repository path, so
+`go get` resolves it), package `ad`; import it with an explicit name:
+
+```go
+import ad "github.com/openbasalt/samba-conductor-ad"
+```
+
+Go 1.27. While the repository is private, `go get` needs
+`GOPRIVATE=github.com/openbasalt/*` and git credentials for GitHub (see
+CONTRIBUTING.md).
 
 | Package | What |
 |---|---|
@@ -199,13 +207,13 @@ positional after `--` and may not start with `-`.
 make test        # unit tests (race detector)
 make check       # gofmt, go vet, staticcheck, govulncheck, tests
 make fuzz        # escape/sid/sambatool/helper fuzzers (FUZZTIME=20s)
-make lab-test    # integration tests against the server-home lab
+make lab-test    # integration tests against the lab
 ```
 
 `make lab-test` (`scripts/lab-test.sh`) compiles the `lab`-tagged test
-binaries here, copies them to `server-home` and runs them there (the lab
+binaries here, copies them to the lab host and runs them there (the lab
 network is only reachable from that host): the `ad` tests on the host, the
-`sambatool` tests as root on dc1. Secrets stay on server-home. The lab:
+`sambatool` tests as root on dc1. Secrets stay on the lab host. The lab:
 `../planning/docs/lab.md`. A full run: [`docs/usage-p0.md`](docs/usage-p0.md).
 
 ## Status

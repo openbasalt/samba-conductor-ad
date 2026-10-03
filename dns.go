@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 // AD-integrated DNS lives in the directory (MS-DNSP 2.3): a zone is a

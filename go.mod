@@ -1,4 +1,4 @@
-module github.com/samba-conductor/ad
+module github.com/openbasalt/samba-conductor-ad
 
 go 1.27.0
 

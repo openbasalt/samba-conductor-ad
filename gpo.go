@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 // Group Policy as stored in the directory (MS-GPOL 2.2): a GPO is a

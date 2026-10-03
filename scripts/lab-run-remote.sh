@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the lab host (server-home), started by lab-test.sh. Loads the lab
+# Runs ON the lab host, started by lab-test.sh. Loads the lab
 # secrets into the test environment, runs the ad tests here and the
 # sambatool tests as root on dc1.
 set -uo pipefail

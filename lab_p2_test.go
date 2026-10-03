@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samba-conductor/ad/escape"
+	"github.com/openbasalt/samba-conductor-ad/escape"
 )
 
 // labDNSLookup resolves name through the DC's own DNS server (what clients

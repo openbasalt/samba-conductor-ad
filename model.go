@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad/sid"
+	"github.com/openbasalt/samba-conductor-ad/sid"
 )
 
 // UAC is userAccountControl (MS-ADTS 2.2.16).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the lab integration tests (build tag "lab") against the Samba lab on
-# server-home (planning/docs/lab.md).
+# the lab host (planning/docs/lab.md).
 #
 # The test binaries are compiled here (CGO off, so they run on Fedora and
 # Debian alike), copied to the lab host and run there, because only that host
