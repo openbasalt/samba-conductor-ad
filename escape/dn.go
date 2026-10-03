@@ -3,6 +3,7 @@ package escape
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
@@ -86,4 +87,27 @@ func EqualDN(a, b string) bool {
 		return false
 	}
 	return da.EqualFold(db)
+}
+
+// NormalizeDN returns a canonical form of dn for use as a map key: parsed
+// as RFC 4514, attribute types and values lower-cased (AD compares naming
+// attributes case-insensitively), values re-escaped the same way, and the
+// components of a multi-valued RDN sorted. Two DNs that EqualDN considers
+// equal have the same key. A DN that does not parse is returned
+// lower-cased, so it still works as a (non-canonical) key.
+func NormalizeDN(dn string) string {
+	parsed, err := ldap.ParseDN(dn)
+	if err != nil {
+		return strings.ToLower(dn)
+	}
+	parts := make([]string, 0, len(parsed.RDNs))
+	for _, r := range parsed.RDNs {
+		comps := make([]string, 0, len(r.Attributes))
+		for _, a := range r.Attributes {
+			comps = append(comps, strings.ToLower(a.Type)+"="+DNValue(strings.ToLower(a.Value)))
+		}
+		sort.Strings(comps)
+		parts = append(parts, strings.Join(comps, "+"))
+	}
+	return strings.Join(parts, ",")
 }

@@ -202,3 +202,26 @@ func FuzzDNValue(f *testing.F) {
 		}
 	})
 }
+
+func TestNormalizeDN(t *testing.T) {
+	same := [][2]string{
+		{"CN=Ann,OU=People,DC=example,DC=com", "cn=ann,ou=people,dc=EXAMPLE,dc=com"},
+		{`CN=Escape\, Test,DC=x`, `cn=escape\2c test,dc=x`},
+		{"CN=A+UID=b,DC=x", "UID=B+cn=a,DC=x"},
+		{"CN=A, OU=B,DC=x", "CN=A,OU=B,DC=x"},
+	}
+	for _, c := range same {
+		if NormalizeDN(c[0]) != NormalizeDN(c[1]) {
+			t.Errorf("NormalizeDN(%q) = %q, NormalizeDN(%q) = %q", c[0], NormalizeDN(c[0]), c[1], NormalizeDN(c[1]))
+		}
+		if !EqualDN(c[0], c[1]) {
+			t.Errorf("EqualDN(%q, %q) = false", c[0], c[1])
+		}
+	}
+	if NormalizeDN("CN=A,DC=x") == NormalizeDN("CN=B,DC=x") {
+		t.Error("different DNs share a key")
+	}
+	if got := NormalizeDN("not a dn"); got != "not a dn" {
+		t.Errorf("unparsable DN: %q", got)
+	}
+}
