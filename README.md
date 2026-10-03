@@ -226,3 +226,5 @@ LDAP, GPOs and links, domain and fine-grained password policies, effective
 policy, DC list, ccache export for samba-tool; lab-tested
 (`lab_p2_test.go`, `sambatool/lab_p2_test.go`). See
 `../planning/docs/decisions.md` for the choices made and what is left for P1.
+
+License: Apache-2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)).
