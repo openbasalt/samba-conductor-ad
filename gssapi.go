@@ -212,8 +212,13 @@ func (g *gssClient) NegotiateSaslAuth(input []byte, authzid string) ([]byte, err
 	return out.Marshal()
 }
 
-// unmarshalWrapToken parses an acceptor's wrap token with bounds checks on
-// the checksum length taken from the wire.
+// unmarshalWrapToken parses an acceptor's wrap token (RFC 4121 section
+// 4.2.6.2) with bounds checks on the lengths taken from the wire. After the
+// header comes the payload followed by the checksum, rotated right by RRC
+// bytes (section 4.2.5): Heimdal (Debian's and Ubuntu's Samba) rotates by
+// the checksum length, which puts the checksum first; MIT Kerberos (Fedora's
+// samba-dc) does not rotate. The rotation is undone before the fields are
+// split, so both verify.
 func unmarshalWrapToken(wt *gssapi.WrapToken, b []byte) error {
 	if len(b) < gssapi.HdrLen {
 		return errors.New("ad: wrap token shorter than its header")
@@ -228,15 +233,20 @@ func unmarshalWrapToken(wt *gssapi.WrapToken, b []byte) error {
 		return errors.New("ad: bad wrap token filler byte")
 	}
 	ec := int(binary.BigEndian.Uint16(b[4:6]))
-	if ec > len(b)-gssapi.HdrLen {
+	rrc := int(binary.BigEndian.Uint16(b[6:8]))
+	data := b[gssapi.HdrLen:]
+	if ec > len(data) {
 		return errors.New("ad: inconsistent wrap token checksum length")
 	}
-	start := gssapi.HdrLen + ec
+	if n := len(data); n > 0 {
+		rrc %= n
+		data = append(append(make([]byte, 0, n), data[rrc:]...), data[:rrc]...)
+	}
 	wt.Flags = b[2]
 	wt.EC = uint16(ec)
 	wt.RRC = binary.BigEndian.Uint16(b[6:8])
 	wt.SndSeqNum = binary.BigEndian.Uint64(b[8:16])
-	wt.CheckSum = b[16:start]
-	wt.Payload = b[start:]
+	wt.Payload = data[:len(data)-ec]
+	wt.CheckSum = data[len(data)-ec:]
 	return nil
 }
