@@ -19,7 +19,7 @@ import (
 // the records in binary form. Samba's internal DNS server reads the zones
 // and records from the database on every query, so LDAP writes made with
 // the user's own credentials take effect at once (verified in the lab,
-// planning/docs/decisions.md), with AD's ACLs applied.
+// docs/design.md), with AD's ACLs applied.
 
 // DNS partitions a zone can live in.
 const (

@@ -1,6 +1,6 @@
 //go:build lab
 
-// Integration tests against the Samba lab (planning/docs/lab.md). They run
+// Integration tests against the Samba lab (https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md). They run
 // on the lab host (or anywhere that reaches the lab network) with:
 //
 //	AD_LAB_REALM, AD_LAB_DNS (comma-separated DC IPs), AD_LAB_CA (CA PEM path),

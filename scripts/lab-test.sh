@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the lab integration tests (build tag "lab") against the Samba lab on
-# the lab host (planning/docs/lab.md).
+# the lab host (https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md).
 #
 # The test binaries are compiled here (CGO off, so they run on Fedora and
 # Debian alike), copied to the lab host and run there, because only that host
@@ -8,13 +8,13 @@
 # sambatool tests run as root on dc1, where samba-tool lives. Secrets are read
 # on the lab host from ~/conductor-lab/secrets.env and never leave it.
 #
-#   scripts/lab-test.sh                 # LAB_HOST=server-home
+#   scripts/lab-test.sh                 # LAB_HOST=<ssh destination of the lab host>
 #   LAB_HOST=local scripts/lab-test.sh  # when already on the lab host
 #   RUN=TestLabPaging scripts/lab-test.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-LAB_HOST="${LAB_HOST:-server-home}"
+LAB_HOST="${LAB_HOST:?set LAB_HOST to the SSH destination of the lab host}"
 RUN="${RUN:-Lab}"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT

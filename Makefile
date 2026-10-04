@@ -14,7 +14,7 @@ FUZZTIME ?= 20s
 test:
 	go test -race ./...
 
-# Integration tests against the lab (planning/docs/lab.md).
+# Integration tests against the lab (https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md).
 # LAB_HOST=local when running on the lab host itself; RUN=<regexp> to filter.
 lab-test:
 	./scripts/lab-test.sh

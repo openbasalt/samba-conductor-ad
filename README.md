@@ -2,8 +2,8 @@
 
 Go library for Samba Active Directory access, used by Samba Conductor v2 and
 later by `tui-dc`. Pure library: no global state, `context.Context` on every
-network call, typed errors. Design: `../planning/docs/architecture.md` (§4, §5,
-§8) and `../planning/docs/p0-spec.md`.
+network call, typed errors. Design: [docs/design.md](docs/design.md) and the
+family's [architecture.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/architecture.md).
 
 Module `github.com/openbasalt/samba-conductor-ad` (the repository path, so
 `go get` resolves it), package `ad`; import it with an explicit name:
@@ -92,7 +92,7 @@ is ignored by Samba). `Conn.Count` counts without attributes and
 page-numbered UIs.
 
 Filters only come from the `escape` builders (`Eq`, `Prefix`, `Contains`,
-`And`, `Or`, `Not`, `BitAnd`, `InChain`, `EqBytes`…). `escape.RawFilter` exists
+`And`, `Or`, `Not`, `BitAnd`, `InChain`, `EqBytes` and others). `escape.RawFilter` exists
 for constants such as `"(objectClass=*)"` and must never hold user input.
 Breaking out of the loop abandons the server-side paged result.
 
@@ -130,7 +130,7 @@ on the old `userAccountControl` (an RFC 4528 assertion plus a re-read before
 the write, since Samba ignores the assertion control): a stale read yields
 `ErrConflict` instead of overwriting a concurrent change.
 
-### DNS, Group Policy, password policies (P2)
+### DNS, Group Policy, password policies
 
 ```go
 zones, _ := conn.DNSZones(ctx)                 // DomainDnsZones, ForestDnsZones, legacy
@@ -214,17 +214,14 @@ make lab-test    # integration tests against the lab
 binaries here, copies them to the lab host and runs them there (the lab
 network is only reachable from that host): the `ad` tests on the host, the
 `sambatool` tests as root on dc1. Secrets stay on the lab host. The lab:
-`../planning/docs/lab.md`. A full run: [`docs/usage-p0.md`](docs/usage-p0.md).
+[testing.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md). A full run: [`docs/usage-p0.md`](docs/usage-p0.md).
 
 ## Status
 
-P0 complete (2026-10-01): all unit and lab tests pass. P1 extensions
-(2026-10-02) for conductor: profile attributes, sorting/windows, rename,
-computer enable/disable, FSMO/DC-list helper operations, KDC pinning for
-TGS requests; lab-tested. P2 (2026-10-02): DNS zones and records over
-LDAP, GPOs and links, domain and fine-grained password policies, effective
-policy, DC list, ccache export for samba-tool; lab-tested
-(`lab_p2_test.go`, `sambatool/lab_p2_test.go`). See
-`../planning/docs/decisions.md` for the choices made and what is left for P1.
+Pre-release: no tagged version yet. Unit tests and the lab integration
+tests (`lab_test.go`, `lab_p1_test.go`, `lab_p2_test.go`,
+`sambatool/lab_p2_test.go`) pass against Samba 4.22 (Heimdal) and Fedora's
+Samba with MIT Kerberos. Design and the choices made:
+[docs/design.md](docs/design.md).
 
 License: Apache-2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)).

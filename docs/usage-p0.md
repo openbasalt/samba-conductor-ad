@@ -1,12 +1,12 @@
 # P0 lab integration run
 
 Transcript of `make lab-test` (`scripts/lab-test.sh`) against the
-lab (`../../planning/docs/lab.md`), run on 2026-10-01 right after
-`planning/lab/reset.sh` restored the `seeded` snapshot. No secrets appear: the
+lab ([testing.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md)), run on 2026-10-01 right after
+`lab/reset.sh` restored the `seeded` snapshot. No secrets appear: the
 tests never log passwords, and the transcript was checked against the lab's
 secrets file before committing.
 
-What the run covers (spec `planning/docs/p0-spec.md` §2):
+What the run covers (spec [design.md](design.md) §2):
 
 | Test | Proves |
 |---|---|
