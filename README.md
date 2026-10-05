@@ -117,7 +117,9 @@ Operations: `CreateUser`, `UpdateUser`, `SetUserEnabled`,
 `ResetPassword` (admin), `ChangePassword` (self, LDAP delete+add of
 `unicodePwd`), `MoveObject`, `RenameObject`, `AddGroupMember`,
 `RemoveGroupMember`, `CreateGroup`, `CreateOU`, `DeleteObject` (never
-recursive). `UserUpdateAttributes()` lists what `UpdateUser` can write; the
+recursive). `CreateUser` also writes the optional title, department,
+company, telephone numbers and employee ID when set, and `CreateGroup` the
+group's mail. `UserUpdateAttributes()` lists what `UpdateUser` can write; the
 lab test `TestLabSelfWritableAttributes` pins which of them Samba lets users
 write on themselves (telephoneNumber, mobile, homePhone,
 physicalDeliveryOfficeName, streetAddress, l, st, postalCode, wWWHomePage).

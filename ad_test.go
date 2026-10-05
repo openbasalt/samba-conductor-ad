@@ -377,6 +377,43 @@ func TestOperationPreviews(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
+// TestCreateWithOptionalAttributes: the optional profile attributes of a
+// new user and the mail of a new group are written only when set, and
+// invalid values are refused.
+func TestCreateWithOptionalAttributes(t *testing.T) {
+	op, err := CreateUser(NewUser{ParentDN: "OU=People,DC=lab,DC=test", CN: "Ana Souza", SAMAccountName: "ana",
+		UserPrincipalName: "ana@lab.test", Mail: "ana@example.com", Title: "Analyst", Department: "Sales",
+		TelephoneNumber: "+55 11 5555-0000", Mobile: "+55 11 99999-0000", EmployeeID: "E-42", Password: "S3cret!pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := op.Preview().String()
+	for _, want := range []string{"mail: ana@example.com", "title: Analyst", "department: Sales", "telephoneNumber: +55 11 5555-0000",
+		"mobile: +55 11 99999-0000", "employeeID: E-42"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("preview lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "company:") {
+		t.Errorf("an empty attribute is written:\n%s", p)
+	}
+	if _, err := CreateUser(NewUser{ParentDN: "OU=P,DC=x", CN: "a", SAMAccountName: "a", UserPrincipalName: "a@x", Title: "bad\nvalue"}); err == nil {
+		t.Error("a value with a control character was accepted")
+	}
+	g, err := CreateGroup(NewGroup{ParentDN: "OU=G,DC=lab,DC=test", Name: "Sales Team", SAMAccountName: "sales", Mail: "sales@example.com",
+		Description: "Sales"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := g.Preview().String(); !strings.Contains(got, "mail: sales@example.com") || !strings.Contains(got, "description: Sales") {
+		t.Errorf("group preview:\n%s", got)
+	}
+	plain, _ := CreateGroup(NewGroup{ParentDN: "OU=G,DC=lab,DC=test", Name: "Ops"})
+	if strings.Contains(plain.Preview().String(), "mail:") {
+		t.Errorf("a group without mail has a mail attribute:\n%s", plain.Preview())
+	}
+}
+
 func TestOperationValidation(t *testing.T) {
 	bad := []func() (*Operation, error){
 		func() (*Operation, error) {

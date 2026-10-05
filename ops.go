@@ -338,6 +338,13 @@ type NewUser struct {
 	DisplayName       string
 	Mail              string
 	Description       string
+	// Optional profile attributes, written only when not empty.
+	Title           string
+	Department      string
+	Company         string
+	TelephoneNumber string
+	Mobile          string
+	EmployeeID      string
 	// Password is set in the same request (TLS required). Empty creates the
 	// account disabled and without a password.
 	Password string
@@ -370,10 +377,15 @@ func CreateUser(u NewUser) (*Operation, error) {
 		{Name: "userPrincipalName", Values: []string{u.UserPrincipalName}},
 	}
 	for _, kv := range [][2]string{{"givenName", u.GivenName}, {"sn", u.Surname}, {"displayName", u.DisplayName},
-		{"mail", u.Mail}, {"description", u.Description}} {
-		if kv[1] != "" {
-			attrs = append(attrs, AttrChange{Name: kv[0], Values: []string{kv[1]}})
+		{"mail", u.Mail}, {"description", u.Description}, {"title", u.Title}, {"department", u.Department},
+		{"company", u.Company}, {"telephoneNumber", u.TelephoneNumber}, {"mobile", u.Mobile}, {"employeeID", u.EmployeeID}} {
+		if kv[1] == "" {
+			continue
 		}
+		if err := validAttrValue(kv[0], kv[1]); err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, AttrChange{Name: kv[0], Values: []string{kv[1]}})
 	}
 	if u.Password != "" {
 		attrs = append(attrs, passwordAttr("", u.Password))
@@ -439,6 +451,14 @@ func UserUpdateAttributes() []string {
 // is at most 1024; most are 64-256 and the DC enforces the exact limit).
 const maxAttrValue = 1024
 
+// validAttrValue checks one profile value: bounded, no control characters.
+func validAttrValue(name, v string) error {
+	if len(v) > maxAttrValue || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 }) {
+		return fmt.Errorf("ad: invalid value for %s", name)
+	}
+	return nil
+}
+
 // UpdateUser builds a replace of the given profile attributes.
 func UpdateUser(dn string, u UserUpdate) (*Operation, error) {
 	if err := checkDN(dn); err != nil {
@@ -449,8 +469,8 @@ func UpdateUser(dn string, u UserUpdate) (*Operation, error) {
 		if kv.v == nil {
 			continue
 		}
-		if len(*kv.v) > maxAttrValue || strings.ContainsFunc(*kv.v, func(r rune) bool { return r < 0x20 }) {
-			return nil, fmt.Errorf("ad: invalid value for %s", kv.Attr)
+		if err := validAttrValue(kv.Attr, *kv.v); err != nil {
+			return nil, err
 		}
 		vals := []string{*kv.v}
 		if *kv.v == "" {
@@ -669,6 +689,8 @@ type NewGroup struct {
 	Name           string // CN
 	SAMAccountName string // defaults to Name
 	Description    string
+	// Mail is the group's e-mail address (optional).
+	Mail string
 	// Scope: GroupTypeGlobal (default), GroupTypeDomainLocal or GroupTypeUniversal.
 	Scope GroupType
 	// Distribution creates a distribution (non-security) group.
@@ -705,8 +727,14 @@ func CreateGroup(g NewGroup) (*Operation, error) {
 		{Name: "sAMAccountName", Values: []string{sam}},
 		{Name: "groupType", Values: []string{strconv.FormatInt(int64(gt), 10)}},
 	}
-	if g.Description != "" {
-		attrs = append(attrs, AttrChange{Name: "description", Values: []string{g.Description}})
+	for _, kv := range [][2]string{{"description", g.Description}, {"mail", g.Mail}} {
+		if kv[1] == "" {
+			continue
+		}
+		if err := validAttrValue(kv[0], kv[1]); err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, AttrChange{Name: kv[0], Values: []string{kv[1]}})
 	}
 	return &Operation{preview: Preview{Summary: "create group " + sam, Changes: []Change{{Type: ChangeAdd, DN: dn, Attrs: attrs}}}}, nil
 }
