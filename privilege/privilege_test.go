@@ -41,10 +41,8 @@ type fakeObj struct {
 // membership is only in primaryGroupID, tokenGroups is transitive and
 // includes the primary group.
 type fakeDir struct {
-	domain    sid.SID
-	objs      map[string]*fakeObj
-	noInChain bool
-	inChain   int
+	domain sid.SID
+	objs   map[string]*fakeObj
 }
 
 func key(dn string) string { return escape.NormalizeDN(dn) }
@@ -97,38 +95,6 @@ func (f *fakeDir) object(_ context.Context, dn string) (object, error) {
 		return object{}, err
 	}
 	return o.view(), nil
-}
-
-func (f *fakeDir) inChainMembers(_ context.Context, groupDN string) ([]object, error) {
-	if f.noInChain {
-		return nil, errInChainUnsupported
-	}
-	f.inChain++
-	var out []object
-	seen := map[string]bool{key(groupDN): true}
-	queue := []string{groupDN}
-	for len(queue) > 0 {
-		g, err := f.get(queue[0])
-		queue = queue[1:]
-		if err != nil {
-			return nil, err
-		}
-		for _, m := range g.members {
-			if seen[key(m)] {
-				continue
-			}
-			seen[key(m)] = true
-			o, err := f.get(m)
-			if err != nil {
-				continue
-			}
-			out = append(out, o.view())
-			if o.class == "group" {
-				queue = append(queue, m)
-			}
-		}
-	}
-	return out, nil
 }
 
 func (f *fakeDir) directMembers(_ context.Context, groupDN string) ([]string, error) {
@@ -321,69 +287,61 @@ func newLab() *lab {
 }
 
 func TestPrivileged(t *testing.T) {
-	for _, noInChain := range []bool{false, true} {
-		t.Run(fmt.Sprintf("inChainUnsupported=%v", noInChain), func(t *testing.T) {
-			l := newLab()
-			l.noInChain = noInChain
-			ctx := context.Background()
-			now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-			x, err := build(ctx, l, Options{ExtraGroupSIDs: []sid.SID{l.role}}, now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !x.BuiltAt().Equal(now) {
-				t.Fatalf("BuiltAt %v", x.BuiltAt())
-			}
-			if !noInChain && l.inChain == 0 {
-				t.Fatal("the in-chain search was not used")
-			}
-			special := ",OU=Special," + base
-			ace := l.peopleACE
-			daGroup := []Reason{{KindGroup, sid.BuiltinAdministrators.String()}, {KindGroup, l.da.String()},
-				{KindOwner, "OU=People," + base}, {KindACL, base + ": " + allow(fullDS, l.da).SDDL()}}
-			cases := []struct {
-				dn    string
-				want  []Reason
-				exact bool
-			}{
-				{"CN=lab.admin" + special, daGroup, false},
-				{"CN=nested.admin" + special, daGroup, false},
-				{"CN=primary.admin" + special, daGroup, false},
-				{"CN=stale.admin" + special, []Reason{{KindAdminCount, "CN=stale.admin" + special}}, true},
-				{"CN=helpdesk.user" + special, []Reason{{KindACL, "OU=People," + base + ": " + ace.SDDL()}}, true},
-				{"CN=gpo.owner" + special, []Reason{{KindOwner, gpoDN}}, true},
-				{"CN=extra.user" + special, []Reason{{KindGroup, l.role.String()}}, true},
-				{"CN=normal.user" + special, nil, true},
-				{"CN=staff.user,OU=People," + base, nil, true},
-			}
-			for _, tc := range cases {
-				got, err := x.privileged(ctx, l, tc.dn)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !containsAll(got, tc.want) || (tc.exact && len(got) != len(tc.want)) {
-					t.Errorf("%s:\n got %v\nwant %v (exact %v)", tc.dn, got, tc.want, tc.exact)
-				}
-			}
-			want := "OU=People," + base + ": (OA;CIIO;CR;" + resetPwd + ";" + userClass + ";" + l.helpdesk.String() + ")"
-			if got := x.PrivilegedSID(l.helpdesk); !reflect.DeepEqual(got, []Reason{{KindACL, want}}) {
-				t.Errorf("Helpdesk group: %v", got)
-			}
-			// Members are indexed by SID too, without a directory lookup.
-			if got := x.PrivilegedSID(l.rid(1102)); len(got) != 1 || got[0].Kind != KindACL {
-				t.Errorf("helpdesk.user by SID: %v", got)
-			}
-			if got := x.PrivilegedSID(l.rid(1106)); len(got) == 0 {
-				t.Error("primary-group member of a nested group missing from the index")
-			}
-			if got := x.PrivilegedSID(l.rid(1103)); got != nil {
-				t.Errorf("normal.user by SID: %v", got)
-			}
-			if got := sidStrings(x.TrusteeSIDs()); !reflect.DeepEqual(got, sortedStrings(
-				sid.BuiltinAdministrators.String(), l.da.String(), l.helpdesk.String(), l.rid(1300).String())) {
-				t.Errorf("TrusteeSIDs %v", got)
-			}
-		})
+	l := newLab()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	x, err := build(ctx, l, Options{ExtraGroupSIDs: []sid.SID{l.role}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !x.BuiltAt().Equal(now) {
+		t.Fatalf("BuiltAt %v", x.BuiltAt())
+	}
+	special := ",OU=Special," + base
+	ace := l.peopleACE
+	daGroup := []Reason{{KindGroup, sid.BuiltinAdministrators.String()}, {KindGroup, l.da.String()},
+		{KindOwner, "OU=People," + base}, {KindACL, base + ": " + allow(fullDS, l.da).SDDL()}}
+	cases := []struct {
+		dn    string
+		want  []Reason
+		exact bool
+	}{
+		{"CN=lab.admin" + special, daGroup, false},
+		{"CN=nested.admin" + special, daGroup, false},
+		{"CN=primary.admin" + special, daGroup, false},
+		{"CN=stale.admin" + special, []Reason{{KindAdminCount, "CN=stale.admin" + special}}, true},
+		{"CN=helpdesk.user" + special, []Reason{{KindACL, "OU=People," + base + ": " + ace.SDDL()}}, true},
+		{"CN=gpo.owner" + special, []Reason{{KindOwner, gpoDN}}, true},
+		{"CN=extra.user" + special, []Reason{{KindGroup, l.role.String()}}, true},
+		{"CN=normal.user" + special, nil, true},
+		{"CN=staff.user,OU=People," + base, nil, true},
+	}
+	for _, tc := range cases {
+		got, err := x.privileged(ctx, l, tc.dn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsAll(got, tc.want) || (tc.exact && len(got) != len(tc.want)) {
+			t.Errorf("%s:\n got %v\nwant %v (exact %v)", tc.dn, got, tc.want, tc.exact)
+		}
+	}
+	want := "OU=People," + base + ": (OA;CIIO;CR;" + resetPwd + ";" + userClass + ";" + l.helpdesk.String() + ")"
+	if got := x.PrivilegedSID(l.helpdesk); !reflect.DeepEqual(got, []Reason{{KindACL, want}}) {
+		t.Errorf("Helpdesk group: %v", got)
+	}
+	// Members are indexed by SID too, without a directory lookup.
+	if got := x.PrivilegedSID(l.rid(1102)); len(got) != 1 || got[0].Kind != KindACL {
+		t.Errorf("helpdesk.user by SID: %v", got)
+	}
+	if got := x.PrivilegedSID(l.rid(1106)); len(got) == 0 {
+		t.Error("primary-group member of a nested group missing from the index")
+	}
+	if got := x.PrivilegedSID(l.rid(1103)); got != nil {
+		t.Errorf("normal.user by SID: %v", got)
+	}
+	if got := sidStrings(x.TrusteeSIDs()); !reflect.DeepEqual(got, sortedStrings(
+		sid.BuiltinAdministrators.String(), l.da.String(), l.helpdesk.String(), l.rid(1300).String())) {
+		t.Errorf("TrusteeSIDs %v", got)
 	}
 }
 

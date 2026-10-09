@@ -2,7 +2,6 @@ package privilege
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,9 +27,6 @@ type securedObject struct {
 	SD *sd.Descriptor
 }
 
-// errInChainUnsupported: the DC cannot evaluate LDAP_MATCHING_RULE_IN_CHAIN.
-var errInChainUnsupported = errors.New("privilege: in-chain matching rule unsupported")
-
 // directory is the small set of reads the index is built from. connDir
 // implements it over an *ad.Conn; tests use an in-memory fake.
 type directory interface {
@@ -41,9 +37,6 @@ type directory interface {
 	findBySID(ctx context.Context, s sid.SID) (string, error)
 	// object reads one object by DN (ad.ErrNotFound when it does not exist).
 	object(ctx context.Context, dn string) (object, error)
-	// inChainMembers returns every direct and nested member of the group,
-	// or errInChainUnsupported.
-	inChainMembers(ctx context.Context, groupDN string) ([]object, error)
 	// directMembers returns the DNs in the group's member attribute.
 	directMembers(ctx context.Context, groupDN string) ([]string, error)
 	// primaryGroupMembers returns the objects whose primaryGroupID is one
@@ -109,14 +102,6 @@ func (d connDir) objects(ctx context.Context, req ad.SearchRequest) ([]object, e
 		out = append(out, objectFromEntry(e))
 	}
 	return out, nil
-}
-
-func (d connDir) inChainMembers(ctx context.Context, groupDN string) ([]object, error) {
-	out, err := d.objects(ctx, ad.SearchRequest{Filter: escape.InChain("memberOf", groupDN)})
-	if ldap.IsErrorAnyOf(err, ldap.LDAPResultInappropriateMatching, ldap.LDAPResultUnwillingToPerform) {
-		return nil, errInChainUnsupported
-	}
-	return out, err
 }
 
 func (d connDir) directMembers(ctx context.Context, groupDN string) ([]string, error) {

@@ -273,10 +273,11 @@ func (b *builder) expand(ctx context.Context, g sid.SID) ([]object, error) {
 	if !o.Group {
 		return nil, nil
 	}
-	members, err := b.dir.inChainMembers(ctx, dn)
-	if errors.Is(err, errInChainUnsupported) {
-		members, err = b.walkMembers(ctx, dn)
-	}
+	// Walk the member values instead of one LDAP_MATCHING_RULE_IN_CHAIN
+	// search: Samba evaluates that rule by scanning every object (seconds
+	// per group on a domain of a few thousand users), while reading the
+	// groups themselves costs one lookup per member.
+	members, err := b.walkMembers(ctx, dn)
 	if err != nil {
 		return nil, fmt.Errorf("privilege: members of %s: %w", dn, err)
 	}
@@ -310,8 +311,8 @@ func groupSIDs(objs []object) []sid.SID {
 	return out
 }
 
-// walkMembers follows member values breadth-first, for DCs that cannot
-// evaluate LDAP_MATCHING_RULE_IN_CHAIN.
+// walkMembers follows member values breadth-first and returns every direct
+// and nested member of the group.
 func (b *builder) walkMembers(ctx context.Context, groupDN string) ([]object, error) {
 	var out []object
 	seen := map[string]bool{escape.NormalizeDN(groupDN): true}
