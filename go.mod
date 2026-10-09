@@ -1,6 +1,6 @@
 module github.com/openbasalt/samba-conductor-ad
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/go-asn1-ber/asn1-ber v1.5.8
@@ -14,5 +14,5 @@ require (
 	github.com/go-crypt/x v0.4.12 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 )
