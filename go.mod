@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-krb5/krb5 v0.1.0
-	github.com/go-krb5/x v0.3.2
+	github.com/go-krb5/x v0.4.1
 	github.com/go-ldap/ldap/v3 v3.4.14
 )
 
