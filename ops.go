@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -352,7 +354,15 @@ type NewUser struct {
 	MustChangePassword bool
 	// Disabled creates the account disabled even with a password.
 	Disabled bool
+	// ExtraAttributes are written by the add as well, by LDAP name (for
+	// example a marker attribute); identity, security, password and
+	// membership attributes are refused (see ReplaceAttributes).
+	ExtraAttributes map[string][]string
 }
+
+// newUserFields are the attributes NewUser writes through its own fields.
+var newUserFields = []string{"givenName", "sn", "displayName", "mail", "description", "title", "department", "company",
+	"telephoneNumber", "mobile", "employeeID"}
 
 // CreateUser builds the add of a user, password included, as one request.
 func CreateUser(u NewUser) (*Operation, error) {
@@ -386,6 +396,21 @@ func CreateUser(u NewUser) (*Operation, error) {
 			return nil, err
 		}
 		attrs = append(attrs, AttrChange{Name: kv[0], Values: []string{kv[1]}})
+	}
+	for _, name := range slices.Sorted(maps.Keys(u.ExtraAttributes)) {
+		vals := u.ExtraAttributes[name]
+		if err := checkExtraAttr(name, vals); err != nil {
+			return nil, err
+		}
+		// An attribute NewUser has a field for goes through that field
+		// (one attribute twice in an add is refused by the server).
+		if slices.ContainsFunc(attrs, func(a AttrChange) bool { return strings.EqualFold(a.Name, name) }) ||
+			slices.ContainsFunc(newUserFields, func(f string) bool { return strings.EqualFold(f, name) }) {
+			return nil, fmt.Errorf("%w: %s has its own field", ErrInvalid, name)
+		}
+		if len(vals) > 0 {
+			attrs = append(attrs, AttrChange{Name: name, Values: slices.Clone(vals)})
+		}
 	}
 	if u.Password != "" {
 		attrs = append(attrs, passwordAttr("", u.Password))
