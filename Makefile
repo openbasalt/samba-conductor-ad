@@ -47,6 +47,7 @@ fuzz:
 	go test ./escape -run '^$$' -fuzz FuzzFilterValue -fuzztime $(FUZZTIME)
 	go test ./escape -run '^$$' -fuzz FuzzDNValue -fuzztime $(FUZZTIME)
 	go test ./sid -run '^$$' -fuzz FuzzSID -fuzztime $(FUZZTIME)
+	go test ./sd -run '^$$' -fuzz FuzzParse -fuzztime $(FUZZTIME)
 	go test ./sambatool -run '^$$' -fuzz FuzzValidateValue -fuzztime $(FUZZTIME)
 	go test ./helper -run '^$$' -fuzz FuzzDecode -fuzztime $(FUZZTIME)
 	go test . -run '^$$' -fuzz FuzzDecodeDNSRecord -fuzztime $(FUZZTIME)

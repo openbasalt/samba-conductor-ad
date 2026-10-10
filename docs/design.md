@@ -27,7 +27,8 @@ outside the web stack can use it too. The cross-cutting design is in
   `ErrProtectedObject` and similar sentinels. A connection that could not
   reach any DC returns a `*FailoverError` listing every attempt.
 - Sub-packages: `escape` (filters and DNs), `sid` (SIDs, GUIDs,
-  well-known RIDs), `sambatool` (typed samba-tool operations), `helper`
+  well-known RIDs), `sd` (security descriptors), `privilege` (who holds
+  privileged rights), `sambatool` (typed samba-tool operations), `helper`
   (privileged helper protocol).
 
 ## Sign-in and authentication
@@ -220,6 +221,48 @@ online backup and restore; the DNS RPC path).
   into structs; raw output is not meant for end users.
 - `samba-tool gpo` accepts only `-H`, so the package builds `-H<url>` from
   a validated LDAP URL.
+
+## Security descriptors and the privilege index
+
+Package `sd` parses the self-relative `SECURITY_DESCRIPTOR` (MS-DTYP 2.4.6)
+that AD returns in `nTSecurityDescriptor`: revision, control flags, owner,
+group and DACL. The SACL is skipped. Allowed, denied and their object
+variants are decoded (mask, trustee, object type and inherited object type
+GUIDs); other ACE types are kept as raw bytes. Every offset and size is
+bounds-checked, so a truncated or inconsistent descriptor is an error and
+never a panic (fuzz-tested). `ACE.GrantsMoreThanRead` tells whether an
+allow entry holds any right beyond list, read property, list object, read
+control and generic read, and `Descriptor.SDDL` renders the descriptor for
+previews and tests.
+
+Searches can carry the `LDAP_SERVER_SD_FLAGS_OID` control
+(`SearchRequest.SecurityDescriptorFlags`) so the DC returns only the owner,
+group and DACL. Without it the DC tries to include the SACL, which ordinary
+accounts may not read. `Conn.SecurityDescriptor` reads one object.
+
+Package `privilege` builds an index of the SIDs that hold privileged rights
+in the domain, with the reason for each:
+
+- direct, nested and primary-group membership of Domain Admins, Enterprise
+  Admins, Schema Admins, Group Policy Creator Owners, Domain Controllers,
+  Read-only Domain Controllers, Administrators, Account, Server, Print and
+  Backup Operators, plus groups named by the caller (for example an
+  application's administrator, helpdesk and auditor groups);
+- `adminCount` set to 1;
+- an allow entry granting more than read, or ownership, on the domain head,
+  any organizational unit, `AdminSDHolder` or any Group Policy object. The
+  usual system trustees (SELF, CREATOR OWNER, SYSTEM, the domain
+  controllers, anonymous and pre-Windows 2000 compatibility reads) are
+  exempt; Everyone and Authenticated Users are exempt only for entries
+  restricted to one property or extended right.
+
+`Index.Privileged` re-reads the object's own SID, `adminCount` and
+`tokenGroups` at call time, so a membership added after the index was built
+is still seen. A read that fails makes `Build` fail: the index is never
+built from partial data. Samba does not run SDProp, so callers that act on
+behalf of others (a provisioning service, a sync engine, a password reset
+flow) use this index, not `AdminSDHolder`, to keep away from privileged
+accounts. Every read works with a read-only account.
 
 ## Helper protocol
 
