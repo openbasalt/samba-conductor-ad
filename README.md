@@ -21,6 +21,8 @@ CONTRIBUTING.md).
 | `ad` | Connection (LDAPS, CA pinning, SRV discovery, failover), Kerberos sign-in and SASL/GSSAPI bind, simple-bind fallback, AD bind sub-codes, paged search iterator, typed models, operations with Preview then Apply, password change vs reset |
 | `ad/escape` | RFC 4515 filter builder and RFC 4514 DN escaping (fuzz-tested); `RawFilter` only for trusted constants |
 | `ad/sid` | SID and GUID decoding/formatting, well-known RIDs (Domain Admins = 512) |
+| `ad/sd` | Security descriptor parsing (owner, group, DACL, object ACEs), SDDL rendering, the SD flags search control |
+| `ad/privilege` | Index of privileged SIDs: administrative groups (nested and primary), `adminCount`, and rights or ownership on the domain head, OUs, AdminSDHolder and Group Policy objects |
 | `ad/sambatool` | Typed samba-tool operations: validated fields to argv, `--` before user values, no secrets in argv, parsed output, exact command preview |
 | `ad/helper` | Protocol of the privileged helper (Unix socket, allowlisted typed requests, result types, a `Call` client); the helper itself is built in `conductor` |
 

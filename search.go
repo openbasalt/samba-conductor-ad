@@ -55,6 +55,13 @@ type SearchRequest struct {
 	// unsorted). SortReverse sorts descending.
 	SortBy      string
 	SortReverse bool
+	// SecurityDescriptorFlags, when not 0, adds the
+	// LDAP_SERVER_SD_FLAGS_OID control so nTSecurityDescriptor comes back
+	// with only the requested parts (sd.FlagOwner, sd.FlagGroup,
+	// sd.FlagDACL, sd.FlagSACL, combined with OR). Without it the DC
+	// tries to return the SACL too, which needs a right ordinary accounts
+	// do not hold.
+	SecurityDescriptorFlags uint32
 }
 
 // Search runs a paged search (RFC 2696) and streams entries page by page.
@@ -90,6 +97,9 @@ func (c *Conn) Search(ctx context.Context, req SearchRequest) iter.Seq2[*ldap.En
 				return
 			}
 			controls = append(controls, sortControl{attr: req.SortBy, reverse: req.SortReverse})
+		}
+		if req.SecurityDescriptorFlags != 0 {
+			controls = append(controls, sdFlagsControl{flags: req.SecurityDescriptorFlags})
 		}
 		count := 0
 		for {

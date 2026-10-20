@@ -31,6 +31,10 @@ echo "=== ad package (on $(hostname -s), Go test binary)"
 ./ad.test -test.v -test.count=1 -test.run "${RUN:-Lab}"
 rc_ad=$?
 
+echo "=== privilege package (on $(hostname -s), Go test binary)"
+./privilege.test -test.v -test.count=1 -test.run "${RUN:-Lab}"
+rc_pr=$?
+
 # Make sure dc1 is up again even if the failover test was interrupted.
 $SSH "debian@$DC1" "sudo systemctl is-active --quiet samba-ad-dc || sudo systemctl start samba-ad-dc; $WAIT_UP"
 
@@ -40,5 +44,5 @@ printf 'AD_LAB_SAMBATOOL=1\nAD_LAB_REALM=%s\nAD_LAB_ADMIN_USER=%s\nAD_LAB_ADMIN_
   "$AD_LAB_REALM" "$AD_LAB_ADMIN_USER" "$AD_LAB_ADMIN_PASSWORD" |
   $SSH "debian@$DC1" "sudo bash -c 'set -a; . /dev/stdin; set +a; cd /tmp && ./sambatool.test -test.v -test.count=1 -test.run \"${RUN:-Lab}\"; rc=\$?; rm -f /tmp/sambatool.test; exit \$rc'"
 rc_st=$?
-echo "=== exit: ad=$rc_ad sambatool=$rc_st"
-[ "$rc_ad" = 0 ] && [ "$rc_st" = 0 ]
+echo "=== exit: ad=$rc_ad privilege=$rc_pr sambatool=$rc_st"
+[ "$rc_ad" = 0 ] && [ "$rc_pr" = 0 ] && [ "$rc_st" = 0 ]
