@@ -1,6 +1,6 @@
 module github.com/openbasalt/samba-conductor-ad
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/go-asn1-ber/asn1-ber v1.5.8
