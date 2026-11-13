@@ -120,6 +120,12 @@ func (e *AuthError) Is(target error) bool {
 // PasswordVerified reports whether the directory confirmed the password was
 // correct before refusing (expired or must-change). Only then may a caller
 // offer a password change with that old password.
+//
+// For Kerberos the confirmation comes from KDC answers, which are not
+// authenticated (see SignIn): a forged KDC can produce it for any password.
+// It must therefore unlock nothing but the password change form;
+// ChangePasswordKerberos confirms its own result against a domain
+// controller, and the user signs in again afterwards.
 func (e *AuthError) PasswordVerified() bool {
 	return e.verified && (e.Reason == ReasonPasswordExpired || e.Reason == ReasonPasswordMustChange)
 }
