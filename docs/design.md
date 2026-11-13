@@ -51,6 +51,17 @@ keep the password out of any object that outlives the call.
   then to the others in configured order. The Kerberos library alone
   shuffles KDCs per request, which made a request right after a password
   change or a user creation reach a DC that had not replicated it yet.
+- The AS exchange does not authenticate the KDC: whoever answers on its
+  behalf can encrypt the reply with a key derived from the typed password.
+  `SignInVerified` (and `Session.Verify`) therefore obtain a service ticket
+  for `ldap/<dc>` and bind the CA-pinned LDAPS connection with SASL GSSAPI.
+  A forged KDC does not know the DC's key, so the DC refuses its ticket.
+  The DC's WhoAmI answer must then name the account that signed in, so the
+  identity comes from the directory and not from typed input. Failures match
+  `ErrKDCNotVerified`, never an `*AuthError`, so a refused verifying bind
+  (LDAP result 49) cannot be mistaken for a wrong or expired password.
+  `ChangePasswordKerberos` confirms a kpasswd success the same way, with a
+  sign-in using the new password at the KDC that made the change.
 - `Session.WriteCCache(path)` writes the TGT to a standard credential
   cache file (0600) so samba-tool can act as the user. Absent optional
   ticket times are written as the auth time, not as zero, which MIT and
@@ -74,6 +85,9 @@ A generic result 49 is never read as "maybe expired". Samba's KDC returns
 password gets it too. The library sets `PasswordVerified()` only after a
 second AS exchange for `kadmin/changepw` (which accepts expired passwords)
 succeeds; otherwise the result is "invalid credentials".
+These KDC answers are unauthenticated too: `PasswordVerified()` may only
+lead to the password change form, whose result is confirmed against a DC,
+and never to a signed-in session.
 
 ### Password change versus reset
 

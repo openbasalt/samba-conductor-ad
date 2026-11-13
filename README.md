@@ -60,6 +60,18 @@ if err != nil {
 defer conn.Close()
 ```
 
+An AS exchange alone does not prove a password: Kerberos does not
+authenticate the KDC to the client, so a forged KDC (on the network path, or
+reached through a forged SRV record) could answer with a key derived from
+any password. Binding LDAP with the ticket, as above, settles it, because
+only the real domain can issue a service ticket the DC accepts. A caller
+that only checks a password (an identity provider, a sign-in page) uses
+`ad.SignInVerified`, which also performs that bind and requires the DC's
+WhoAmI answer to be the account that signed in (`session.Account()`). A
+failed verification matches `ad.ErrKDCNotVerified` (or
+`ad.ErrIdentityMismatch`), is never an `*ad.AuthError`, and should be logged
+as an infrastructure problem, not as a wrong password.
+
 `ad.SimpleAuth(username, password)` is the explicit fallback (LDAP simple bind
 over TLS). Both paths classify refusals identically:
 
@@ -75,7 +87,10 @@ over TLS). Both paths classify refusals identically:
 A generic result 49 is never read as "maybe expired". Samba's KDC reports an
 expired password before it checks the password, so for Kerberos the library
 confirms the password with an AS exchange for `kadmin/changepw` (which accepts
-expired passwords) before setting `PasswordVerified`.
+expired passwords) before setting `PasswordVerified`. Those answers come from
+the KDC and are not authenticated either, so `PasswordVerified` must unlock
+nothing but the change form; `ChangePasswordKerberos` confirms a reported
+success with a verified sign-in using the new password.
 
 ### Search (always paged)
 
@@ -198,6 +213,9 @@ positional after `--` and may not start with `-`.
   cache; the password never enters a long-lived client. When the TGT expires
   the user signs in again.
 - Failover never retries a refused password on another DC or KDC.
+- A password counts as verified only after the ticket was used against a DC
+  (`SignInVerified`, or an LDAP bind with `KerberosAuth`); `SignIn` alone is
+  one unauthenticated AS exchange.
 - Read-your-writes: an object created on one DC is unknown to the other DCs
   (LDAP and KDC) until replication. Put the DC that performed the write first
   in `Config.Preferred` for follow-up calls. A `Session` sends its TGS
