@@ -45,6 +45,13 @@ const (
 // maxKDCReply bounds a KDC reply read from the network.
 const maxKDCReply = 1 << 20
 
+// Kerberos ports. They are variables only so that in-package tests can run
+// a fake KDC on an unprivileged port; nothing else changes them.
+var (
+	kdcPort     = "88"
+	kpasswdPort = "464"
+)
+
 // Session is a signed-in Kerberos identity: a TGT and its session key. It
 // holds no password; when the TGT expires the user must sign in again. A
 // Session is safe for concurrent use.
@@ -53,15 +60,29 @@ type Session struct {
 	cl        *client.Client
 	dial      *ctxDialer
 	principal string
-	realm     string
-	expires   time.Time
-	closed    bool
+	// name is the client principal name without the realm, as signed in.
+	name    string
+	realm   string
+	expires time.Time
+	closed  bool
+	// account is the sAMAccountName a domain controller bound with this
+	// session's ticket (set by Verify; empty until then).
+	account string
 	// ccache is the TGT in MIT ccache format, for WriteCCache.
 	ccache []byte
 }
 
 // Principal returns "user@REALM".
 func (s *Session) Principal() string { return s.principal }
+
+// Account returns the sAMAccountName that a domain controller confirmed
+// for this session (see Verify and SignInVerified), or "" when the session
+// has not been verified.
+func (s *Session) Account() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.account
+}
 
 // Realm returns the Kerberos realm.
 func (s *Session) Realm() string { return s.realm }
@@ -149,7 +170,7 @@ func (c *ctxDialer) Dial(network, addr string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("ad: Kerberos over %s is disabled", network)
 	}
-	if _, port, err := net.SplitHostPort(addr); err == nil && port == "88" && len(c.kdcOrder) > 0 {
+	if _, port, err := net.SplitHostPort(addr); err == nil && port == kdcPort && len(c.kdcOrder) > 0 {
 		var firstErr error
 		for _, a := range c.kdcOrder {
 			conn, err := c.d.DialContext(ctx, network, a)
@@ -172,11 +193,11 @@ func (c *ctxDialer) Dial(network, addr string) (net.Conn, error) {
 func kdcOrderFrom(first string, hosts []string) []string {
 	out := make([]string, 0, len(hosts))
 	if first != "" {
-		out = append(out, net.JoinHostPort(first, "88"))
+		out = append(out, net.JoinHostPort(first, kdcPort))
 	}
 	for _, h := range hosts {
 		if h != first {
-			out = append(out, net.JoinHostPort(h, "88"))
+			out = append(out, net.JoinHostPort(h, kdcPort))
 		}
 	}
 	return out
@@ -242,7 +263,7 @@ func krb5Config(realm string, hosts []string) (*config.Config, error) {
 		if !validHost(h) {
 			return nil, fmt.Errorf("ad: invalid KDC host %q", h)
 		}
-		fmt.Fprintf(&sb, "  kdc = %s\n  kpasswd_server = %s\n", net.JoinHostPort(h, "88"), net.JoinHostPort(h, "464"))
+		fmt.Fprintf(&sb, "  kdc = %s\n  kpasswd_server = %s\n", net.JoinHostPort(h, kdcPort), net.JoinHostPort(h, kpasswdPort))
 	}
 	domain := strings.ToLower(realm)
 	fmt.Fprintf(&sb, " }\n[domain_realm]\n .%s = %s\n %s = %s\n", domain, realm, domain, realm)
@@ -366,7 +387,7 @@ func (k *kdcSet) roundTrip(ctx context.Context, req *messages.ASReq) (messages.A
 	if err != nil {
 		return messages.ASRep{}, nil, fmt.Errorf("ad: marshaling AS-REQ: %w", err)
 	}
-	rb, err := k.send(ctx, "88", b)
+	rb, err := k.send(ctx, kdcPort, b)
 	if err != nil {
 		return messages.ASRep{}, nil, err
 	}
@@ -508,6 +529,14 @@ func classifyKRBError(e messages.KRBError, afterPreauth bool) *AuthError {
 // against the realm's KDCs, discovered like DCs) and returns a Session that
 // holds only the ticket. The password is not retained. Refusals are
 // *AuthError values.
+//
+// The AS exchange alone does not prove the password: Kerberos does not
+// authenticate the KDC to the client, so whoever answers in place of the
+// KDC (on the network path to port 88, or through a forged SRV record) can
+// encrypt the reply with a key derived from any password it likes. A
+// caller that uses the Session to bind LDAP (Connect with KerberosAuth)
+// gets that proof from the domain controller. A caller that only wants to
+// know whether a password is right must use SignInVerified instead.
 func SignIn(ctx context.Context, cfg Config, username, password string) (*Session, error) {
 	if password == "" {
 		return nil, &AuthError{Reason: ReasonInvalidCredentials, Mechanism: "kerberos", Code: "empty password"}
@@ -535,20 +564,27 @@ func SignIn(ctx context.Context, cfg Config, username, password string) (*Sessio
 		}
 		return nil, err
 	}
-	cc, raw, err := ccacheFromASRep(rep, cname, ks.realm)
+	return ks.newSession(rep, cname)
+}
+
+// newSession builds a Session from the TGT of an AS exchange. Its TGS
+// requests go to the KDC that answered first.
+func (k *kdcSet) newSession(rep messages.ASRep, cname types.PrincipalName) (*Session, error) {
+	cc, raw, err := ccacheFromASRep(rep, cname, k.realm)
 	if err != nil {
 		return nil, err
 	}
-	cd := &ctxDialer{ctx: context.Background(), d: ks.dial, kdcOrder: kdcOrderFrom(ks.answered, ks.hosts)}
-	cl, err := client.NewFromCCache(cc, ks.cfg, client.DisablePAFXFAST(true), client.UseDialer(cd))
+	cd := &ctxDialer{ctx: context.Background(), d: k.dial, kdcOrder: kdcOrderFrom(k.answered, k.hosts)}
+	cl, err := client.NewFromCCache(cc, k.cfg, client.DisablePAFXFAST(true), client.UseDialer(cd))
 	if err != nil {
 		return nil, fmt.Errorf("ad: building Kerberos client: %w", err)
 	}
 	return &Session{
 		cl:        cl,
 		dial:      cd,
-		principal: cname.PrincipalNameString() + "@" + ks.realm,
-		realm:     ks.realm,
+		principal: cname.PrincipalNameString() + "@" + k.realm,
+		name:      cname.PrincipalNameString(),
+		realm:     k.realm,
 		expires:   rep.DecryptedEncPart.EndTime,
 		ccache:    raw,
 	}, nil
@@ -558,6 +594,12 @@ func SignIn(ctx context.Context, cfg Config, username, password string) (*Sessio
 // protocol (RFC 3244), authenticating with the old password. It works for
 // accounts that must change their password (pwdLastSet=0) or whose password
 // expired, which cannot bind to LDAP. The domain's password policy applies.
+//
+// A success reported by kpasswd is confirmed before it is returned: the
+// library signs in with the new password at the KDC that made the change
+// and binds LDAP with that ticket (see Session.Verify). When that
+// confirmation fails the error matches ErrKDCNotVerified; the password may
+// or may not have changed.
 func ChangePasswordKerberos(ctx context.Context, cfg Config, username, oldPassword, newPassword string) error {
 	if oldPassword == "" || newPassword == "" {
 		return errors.New("ad: old and new passwords are required")
@@ -578,7 +620,7 @@ func ChangePasswordKerberos(ctx context.Context, cfg Config, username, oldPasswo
 	if err != nil {
 		return err
 	}
-	rb, err := ks.send(ctx, "464", b)
+	rb, err := ks.send(ctx, kpasswdPort, b)
 	if err != nil {
 		return err
 	}
@@ -591,7 +633,10 @@ func ChangePasswordKerberos(ctx context.Context, cfg Config, username, oldPasswo
 	}
 	switch reply.ResultCode {
 	case client.KRB5_KPASSWD_SUCCESS:
-		return nil
+		// The kpasswd reply is protected only by the session key of the
+		// kadmin/changepw ticket, which a forged KDC chose itself: confirm
+		// the change with a verified sign-in using the new password.
+		return ks.confirmPasswordChange(ctx, cfg, cname, newPassword)
 	case client.KRB5_KPASSWD_SOFTERROR:
 		return fmt.Errorf("%w: %s", ErrPasswordPolicy, strings.TrimSpace(reply.Result))
 	case client.KRB5_KPASSWD_ACCESSDENIED, client.KRB5_KPASSWD_AUTHERROR:

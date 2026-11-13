@@ -135,6 +135,24 @@ func TestLabKerberosSignIn(t *testing.T) {
 	}
 }
 
+func TestLabSignInVerified(t *testing.T) {
+	ctx := labCtx(t)
+	cfg := labConfig(t)
+	s, err := SignInVerified(ctx, cfg, "user0001", labEnv(t, "AD_LAB_USER_PASSWORD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !strings.EqualFold(s.Account(), "user0001") {
+		t.Fatalf("verified account %q", s.Account())
+	}
+	_, err = SignInVerified(ctx, cfg, "user0001", "not the password")
+	var ae *AuthError
+	if !errors.As(err, &ae) || ae.Reason != ReasonInvalidCredentials {
+		t.Fatalf("wrong password: %v", err)
+	}
+}
+
 func TestLabSimpleBind(t *testing.T) {
 	ctx := labCtx(t)
 	c, err := Connect(ctx, labConfig(t), SimpleAuth("user0001", labEnv(t, "AD_LAB_USER_PASSWORD")))
