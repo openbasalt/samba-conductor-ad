@@ -27,6 +27,14 @@ func labDNSLookup(t *testing.T, dc, name string) []string {
 func TestLabDNSReadSeeded(t *testing.T) {
 	ctx := labCtx(t)
 	c := adminConn(t)
+	// The lab's names and network come from its environment (lab_test.go):
+	// the realm from AD_LAB_REALM, the seeded reverse zone from the DCs'
+	// subnet (AD_LAB_DNS).
+	realm := strings.ToLower(labEnv(t, "AD_LAB_REALM"))
+	reverse, err := labReverseZone(strings.Split(labEnv(t, "AD_LAB_DNS"), ","))
+	if err != nil {
+		t.Fatal(err)
+	}
 	zones, err := c.DNSZones(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -36,8 +44,8 @@ func TestLabDNSReadSeeded(t *testing.T) {
 		byName[z.Name] = z
 		t.Logf("zone %s (%s) reverse=%v", z.Name, z.Partition, z.Reverse())
 	}
-	for name, part := range map[string]string{"lab.conductor.test": DNSPartitionDomain, "_msdcs.lab.conductor.test": DNSPartitionForest,
-		"apps.conductor.test": DNSPartitionDomain, "0.93.10.in-addr.arpa": DNSPartitionDomain} {
+	for name, part := range map[string]string{realm: DNSPartitionDomain, "_msdcs." + realm: DNSPartitionForest,
+		"apps.conductor.test": DNSPartitionDomain, reverse: DNSPartitionDomain} {
 		if byName[name].Partition != part {
 			t.Errorf("zone %s: %+v", name, byName[name])
 		}
@@ -47,11 +55,11 @@ func TestLabDNSReadSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("policy %+v", pol)
-	if !slices.Contains(pol.DCHosts, "dc1.lab.conductor.test") || !slices.Contains(pol.DCHosts, "dc2.lab.conductor.test") {
+	if !slices.Contains(pol.DCHosts, "dc1."+realm) || !slices.Contains(pol.DCHosts, "dc2."+realm) {
 		t.Fatalf("DCs not discovered: %v", pol.DCHosts)
 	}
 	// Every record of the AD zones decodes, and the classification holds.
-	for _, zn := range []string{"lab.conductor.test", "_msdcs.lab.conductor.test", "apps.conductor.test"} {
+	for _, zn := range []string{realm, "_msdcs." + realm, "apps.conductor.test"} {
 		z := byName[zn]
 		for skip := 0; ; skip += 100 {
 			nodes, more, err := c.DNSNodes(ctx, z, "", skip, 100)
@@ -82,8 +90,8 @@ func TestLabDNSReadSeeded(t *testing.T) {
 	if pol.ProtectedNode(apps.Name, www) {
 		t.Fatal("a user record shown as protected")
 	}
-	srv, _ := c.DNSNodeByName(ctx, byName["lab.conductor.test"], "_ldap._tcp")
-	if !pol.ProtectedNode("lab.conductor.test", srv) || len(srv.Records) < 2 {
+	srv, _ := c.DNSNodeByName(ctx, byName[realm], "_ldap._tcp")
+	if !pol.ProtectedNode(realm, srv) || len(srv.Records) < 2 {
 		t.Fatalf("_ldap._tcp: %+v", srv)
 	}
 }

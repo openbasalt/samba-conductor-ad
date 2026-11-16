@@ -61,6 +61,10 @@ func TestLabReplication(t *testing.T) {
 	}
 }
 
+// testRecordAddr is the address of the throwaway A record (TEST-NET-1:
+// a record's data need not be on the lab's network).
+const testRecordAddr = "192.0.2.250"
+
 func TestLabDNSWithPasswordFD(t *testing.T) {
 	r, realm := labRunner(t, true)
 	server := "dc1." + realm
@@ -72,7 +76,7 @@ func TestLabDNSWithPasswordFD(t *testing.T) {
 	b := make([]byte, 3)
 	_, _ = rand.Read(b)
 	name := fmt.Sprintf("conductor-test-%x", b)
-	add := DNSAddRecord{Server: server, Zone: realm, Name: name, Type: DNSTypeA, Data: "10.93.0.250"}
+	add := DNSAddRecord{Server: server, Zone: realm, Name: name, Type: DNSTypeA, Data: testRecordAddr}
 	p, _ := Preview(r, add)
 	t.Logf("$ %s", p)
 	if strings.Contains(p, os.Getenv("AD_LAB_ADMIN_PASSWORD")) {
@@ -82,11 +86,11 @@ func TestLabDNSWithPasswordFD(t *testing.T) {
 		t.Fatal(err)
 	}
 	recs, err := Run(context.Background(), r, DNSQuery{Server: server, Zone: realm, Name: name, Type: DNSTypeA})
-	if err != nil || len(recs) != 1 || recs[0].Data != "10.93.0.250" {
+	if err != nil || len(recs) != 1 || recs[0].Data != testRecordAddr {
 		t.Fatalf("query: %+v %v", recs, err)
 	}
 	t.Logf("query: %+v", recs[0])
-	if _, err := Run(context.Background(), r, DNSDeleteRecord{Server: server, Zone: realm, Name: name, Type: DNSTypeA, Data: "10.93.0.250"}); err != nil {
+	if _, err := Run(context.Background(), r, DNSDeleteRecord{Server: server, Zone: realm, Name: name, Type: DNSTypeA, Data: testRecordAddr}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = Run(context.Background(), r, DNSQuery{Server: server, Zone: realm, Name: name, Type: DNSTypeA})
