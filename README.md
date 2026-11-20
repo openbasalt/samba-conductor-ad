@@ -149,6 +149,28 @@ on the old `userAccountControl` (an RFC 4528 assertion plus a re-read before
 the write, since Samba ignores the assertion control): a stale read yields
 `ErrConflict` instead of overwriting a concurrent change.
 
+### Raw attributes and the restricted attribute editor
+
+`Conn.RawEntry(ctx, dn)` reads every attribute the bound identity may read
+of one object (a base search for `*`), sorted by name, for an "advanced"
+view. `objectSid` and `objectGUID` come back in their string forms. Secret
+attributes (`unicodePwd`, password histories, `supplementalCredentials`,
+`msDS-ManagedPassword`, LAPS, BitLocker and TPM data,
+`msDS-KeyCredentialLink`, `nTSecurityDescriptor`, trust secrets and others,
+see `IsSecretAttribute`) are marked hidden with no values even when the
+server sends them. A value that is not valid UTF-8 or holds control or
+format characters is reduced to its byte length; at most 50 values per
+attribute (the rest counted) and 1024 bytes per value are kept.
+
+`UpdateUserAttributes(dn, edits)` writes only an allowlist
+(`EditableUserAttributes`: `loginShell`, `unixHomeDirectory`, `uidNumber`,
+`gidNumber`, `gecos`, `otherMailbox`), each value checked by
+`ValidateUserAttribute` (an `*AttrError` with a stable reason code). It
+builds on `ReplaceAttributes`: unchanged attributes are left out, the write
+is conditional on the values read, and the preview notes old and new
+values. `Conn.UIDNumberInUse` tells whether another object already carries
+a `uidNumber`.
+
 ### DNS, Group Policy, password policies
 
 ```go
