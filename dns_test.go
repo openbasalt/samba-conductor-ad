@@ -153,6 +153,107 @@ func TestDNSPolicyProtection(t *testing.T) {
 	}
 }
 
+// TestDNSPolicyADOwnedNames checks that only the names AD registers are
+// protected (Samba's dns_update_list and provisioning), not every name with
+// a label starting with "_" (openbasalt/samba-conductor#38).
+func TestDNSPolicyADOwnedNames(t *testing.T) {
+	single := testDNSPolicy
+	child := DNSPolicy{Domain: "child.lab.example", Forest: "lab.example", DCHosts: []string{"dc9.child.lab.example"}}
+	const site = "Default-First-Site-Name"
+	// Every locator Samba registers, relative to the zone that holds it in
+	// a single-domain forest (the domain zone is also the forest zone).
+	locators := []string{
+		"_ldap._tcp", "_kerberos._tcp", "_kerberos._udp", "_kpasswd._tcp", "_kpasswd._udp", "_gc._tcp",
+		"_ldap._tcp." + site + "._sites", "_kerberos._tcp." + site + "._sites", "_gc._tcp." + site + "._sites",
+		"_ldap._tcp.dc._msdcs", "_kerberos._tcp.dc._msdcs", "_ldap._tcp.pdc._msdcs", "_ldap._tcp.gc._msdcs",
+		"_ldap._tcp." + site + "._sites.dc._msdcs", "_kerberos._tcp." + site + "._sites.dc._msdcs",
+		"_ldap._tcp." + site + "._sites.gc._msdcs", "gc._msdcs",
+		"_ldap._tcp.0f3b2c1d-1111-2222-3333-444455556666.domains._msdcs", "_msdcs",
+		"DomainDnsZones", "ForestDnsZones", "_ldap._tcp.DomainDnsZones", "_ldap._tcp.ForestDnsZones",
+		"_ldap._tcp." + site + "._sites.DomainDnsZones", "_ldap._tcp." + site + "._sites.ForestDnsZones",
+		"_sites", "_tcp." + site + "._sites", "other._sites",
+	}
+	for _, n := range locators {
+		for _, name := range []string{n, strings.ToUpper(n), strings.ToLower(n) + "."} {
+			for _, typ := range []DNSType{DNSTypeSRV, DNSTypeA, DNSTypeTXT, DNSTypeCNAME} {
+				if !single.ProtectedRecord("lab.example", name, typ) {
+					t.Errorf("single-domain zone: %s %s not protected", name, typ)
+				}
+				if !child.ProtectedRecord("CHILD.lab.example.", name, typ) {
+					t.Errorf("child domain zone: %s %s not protected", name, typ)
+				}
+				if !child.ProtectedRecord("lab.example", name, typ) {
+					t.Errorf("forest root zone seen from a child domain: %s %s not protected", name, typ)
+				}
+			}
+		}
+	}
+	// Names that start with "_" but belong to the administrator.
+	allowed := []struct {
+		name string
+		t    DNSType
+	}{
+		{"selector._domainkey", DNSTypeTXT},
+		{"S1._DomainKey", DNSTypeTXT},
+		{"_domainkey", DNSTypeTXT},
+		{"_dmarc", DNSTypeTXT},
+		{"_acme-challenge", DNSTypeTXT},
+		{"_acme-challenge.www", DNSTypeTXT},
+		{"_mta-sts", DNSTypeTXT},
+		{"_smtp._tls", DNSTypeTXT},
+		{"_sip._tcp", DNSTypeSRV},
+		{"_sip._udp", DNSTypeSRV},
+		{"_xmpp-server._tcp", DNSTypeSRV},
+		{"_kerberos-master._udp", DNSTypeSRV},
+		{"_ldaps._tcp", DNSTypeSRV},
+		{"_http._tcp.intranet", DNSTypeSRV},
+		{"ldap._tcp", DNSTypeSRV},
+		{"_ldap", DNSTypeTXT},
+		{"_tcp", DNSTypeTXT},
+		{"sites", DNSTypeA},
+		{"msdcs", DNSTypeA},
+	}
+	for _, c := range allowed {
+		if single.ProtectedRecord("lab.example", c.name, c.t) {
+			t.Errorf("single-domain zone: %s %s protected", c.name, c.t)
+		}
+		if child.ProtectedRecord("child.lab.example", c.name, c.t) {
+			t.Errorf("child domain zone: %s %s protected", c.name, c.t)
+		}
+		if child.ProtectedRecord("lab.example", c.name, c.t) {
+			t.Errorf("forest root zone: %s %s protected", c.name, c.t)
+		}
+	}
+	// The forest root zone of a child domain keeps its apex and host names
+	// editable (they are the root domain's, outside this policy), except
+	// the apex SOA and NS like every zone.
+	if child.ProtectedRecord("lab.example", "@", DNSTypeA) || child.ProtectedRecord("lab.example", "dc9.child", DNSTypeA) {
+		t.Error("forest root zone apex A or host protected")
+	}
+	if !child.ProtectedRecord("lab.example", "@", DNSTypeNS) {
+		t.Error("forest root zone apex NS not protected")
+	}
+	// The domain zone rules that do not depend on the name stay.
+	if !child.ProtectedRecord("child.lab.example", "@", DNSTypeAAAA) || !child.ProtectedRecord("child.lab.example", "DC9", DNSTypeA) {
+		t.Error("child domain apex AAAA or DC host not protected")
+	}
+	// Everything in the forest's _msdcs zone stays protected, even names
+	// that would be the administrator's elsewhere.
+	if !child.ProtectedRecord("_msdcs.lab.example", "_dmarc", DNSTypeTXT) {
+		t.Error("_msdcs zone record not protected")
+	}
+	// Other zones are the administrator's, apart from the apex SOA and NS.
+	if single.ProtectedRecord("apps.example", "_ldap._tcp", DNSTypeSRV) || single.ProtectedRecord("apps.example", "_msdcs", DNSTypeNS) {
+		t.Error("non-AD zone locator name protected")
+	}
+	// A DKIM record can be added and deleted in the domain zone.
+	z := DNSZone{Name: "lab.example", DN: "DC=lab.example,CN=MicrosoftDNS,DC=DomainDnsZones,DC=lab,DC=example"}
+	dkim := DNSRecord{Type: DNSTypeTXT, TTL: 3600, Data: `"v=DKIM1; k=rsa; p=MIIB"`}
+	if _, err := AddDNSRecord(z, single, testApex(t, z.Name), DNSNode{Name: "sel._domainkey", DN: "DC=sel._domainkey," + z.DN}, dkim); err != nil {
+		t.Fatalf("add DKIM: %v", err)
+	}
+}
+
 func testApex(t *testing.T, zone string) DNSNode {
 	t.Helper()
 	soa := DNSRecord{Type: DNSTypeSOA, TTL: 3600, Rank: dnsRankZone, Serial: 1, Data: "dc1.lab.example hostmaster." + zone + " 41 900 600 86400 3600"}

@@ -294,14 +294,55 @@ func (p DNSPolicy) ADZone(zone string) bool {
 	return z == strings.ToLower(p.Domain) || z == "_msdcs."+strings.ToLower(p.Forest)
 }
 
+// adLocatorServices are the service labels of the SRV locators a domain
+// controller registers under _tcp/_udp: _ldap, _kerberos, _kpasswd and _gc.
+// Source: Samba's source4/setup/dns_update_list (the names
+// samba_dnsupdate registers for every DC) and add_dc_domain_records /
+// add_dc_msdcs_records in python/samba/provision/sambadns.py (the names
+// written at provisioning), samba-team/samba commit 393bd9d2. Other
+// services under _tcp/_udp (_sip._tcp, _xmpp-server._tcp,
+// _kerberos-master._udp and so on) are not AD's.
+var adLocatorServices = map[string]bool{"_ldap": true, "_kerberos": true, "_kpasswd": true, "_gc": true}
+
+// adOwnedName reports a name (relative to the domain or forest zone,
+// lower-cased) that AD registers itself or that lies in a subtree AD owns:
+//   - any name under _msdcs (the delegation of the forest's _msdcs zone and
+//     the per-domain dc._msdcs, pdc._msdcs, gc._msdcs and
+//     <guid>.domains._msdcs locators);
+//   - any name under _sites (the per-site locators, such as
+//     _ldap._tcp.<site>._sites and _kerberos._tcp.<site>._sites.dc._msdcs);
+//   - DomainDnsZones and ForestDnsZones and every name below them;
+//   - a locator service label followed by _tcp or _udp (_ldap._tcp,
+//     _kerberos._tcp, _kerberos._udp, _kpasswd._tcp, _kpasswd._udp,
+//     _gc._tcp) and every name below one.
+//
+// A leading underscore alone does not make a name AD's: _dmarc,
+// sel._domainkey, _acme-challenge, _mta-sts and _sip._tcp belong to the
+// administrator.
+func adOwnedName(n string) bool {
+	labels := strings.Split(n, ".")
+	for i, l := range labels {
+		switch l {
+		case "_msdcs", "_sites", "domaindnszones", "forestdnszones":
+			return true
+		case "_tcp", "_udp":
+			if i > 0 && adLocatorServices[labels[i-1]] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ProtectedRecord reports whether a record of type t at name (relative to
 // zone) is managed by AD and must stay read-only:
 //   - in every zone: the apex SOA and NS records (they belong to the zone);
 //   - in the _msdcs zone: everything;
-//   - in the domain zone: names with a label starting with "_" (SRV
-//     locators: _ldap, _kerberos, _gc, _kpasswd, _msdcs delegation…), the
-//     DomainDnsZones/ForestDnsZones names, the apex A/AAAA records (the
-//     DCs' addresses) and the host records of every DC.
+//   - in the domain zone and the forest root zone: the names AD registers
+//     (adOwnedName: the SRV locators, _msdcs, _sites, DomainDnsZones and
+//     ForestDnsZones);
+//   - in the domain zone: the apex A/AAAA records (the DCs' addresses) and
+//     the host records of every DC.
 func (p DNSPolicy) ProtectedRecord(zone, name string, t DNSType) bool {
 	z := strings.ToLower(strings.TrimSuffix(zone, "."))
 	n := strings.ToLower(strings.TrimSuffix(name, "."))
@@ -312,16 +353,18 @@ func (p DNSPolicy) ProtectedRecord(zone, name string, t DNSType) bool {
 	if z == "_msdcs."+strings.ToLower(p.Forest) {
 		return true
 	}
-	if z != strings.ToLower(p.Domain) {
+	domain := z == strings.ToLower(p.Domain)
+	if !domain && z != strings.ToLower(p.Forest) {
+		return false
+	}
+	if !apex && adOwnedName(n) {
+		return true
+	}
+	if !domain {
 		return false
 	}
 	if apex {
 		return t == DNSTypeA || t == DNSTypeAAAA
-	}
-	for _, l := range strings.Split(n, ".") {
-		if strings.HasPrefix(l, "_") || l == "domaindnszones" || l == "forestdnszones" {
-			return true
-		}
 	}
 	for _, h := range p.DCHosts {
 		if strings.EqualFold(n+"."+z, h) {
