@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DNSType is a DNS record type as stored in a dnsRecord value (MS-DNSP
@@ -65,6 +66,11 @@ const (
 	dnsMaxLabelLen       = 63
 )
 
+// maxTXTData bounds the TXT data (each string plus its length byte): room
+// for a 4096-bit DKIM key, well inside the 64 KiB of a DNS record and of a
+// dnsRecord value.
+const maxTXTData = 4000
+
 // DNSRecord is one value of a dnsNode's dnsRecord attribute (MS-DNSP
 // 2.3.2.2), decoded. Data is the canonical text form:
 //
@@ -72,7 +78,7 @@ const (
 //	NS, CNAME, PTR   host name, no final dot    host.example.com
 //	MX               preference host            10 mail.example.com
 //	SRV              priority weight port host  0 100 389 dc1.example.com
-//	TXT              quoted strings             "v=spf1 mx -all"
+//	TXT              quoted strings             "v=spf1 mx -all" "second string"
 //	SOA              mname rname serial refresh retry expire minimum
 type DNSRecord struct {
 	Type   DNSType
@@ -212,13 +218,26 @@ func normalizeDNSData(t DNSType, data string) (string, error) {
 	return "", fmt.Errorf("%w: record type %s", ErrInvalid, t)
 }
 
-// txtStrings parses TXT data: either one or more quoted strings ("a" "b",
-// Go/zone-file escapes) or raw text, which is split into 255-byte strings.
+// txtStrings parses TXT data into its character-strings. The data is read
+// line by line (LF or CRLF), so a multi-line form field maps one line to
+// one string; blank lines are ignored and each line is trimmed. A line that
+// starts with a double quote holds one or more quoted strings ("a" "b",
+// Go/zone-file escapes), which must each fit in 255 bytes. Any other line is
+// raw text taken literally and split into strings of at most 255 bytes, on
+// UTF-8 character boundaries when the text is valid UTF-8. Single-line data
+// therefore behaves as before: quoted strings, or one raw value auto-split.
 func txtStrings(data string) ([]string, error) {
 	var parts []string
-	if strings.HasPrefix(data, `"`) {
-		rest := data
-		for rest != "" {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line) // also drops the CR of a CRLF
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, `"`) {
+			parts = append(parts, splitTXT(line)...)
+			continue
+		}
+		for rest := line; rest != ""; {
 			q, err := strconv.QuotedPrefix(rest)
 			if err != nil {
 				return nil, fmt.Errorf("%w: TXT data: unbalanced quotes", ErrInvalid)
@@ -230,27 +249,66 @@ func txtStrings(data string) ([]string, error) {
 			parts = append(parts, s)
 			rest = strings.TrimLeft(rest[len(q):], " ")
 		}
-	} else {
-		for len(data) > maxTXTChunk {
-			parts = append(parts, data[:maxTXTChunk])
-			data = data[maxTXTChunk:]
-		}
-		parts = append(parts, data)
 	}
 	total := 0
 	for _, p := range parts {
 		if len(p) > maxTXTChunk {
 			return nil, fmt.Errorf("%w: a TXT string is longer than 255 bytes", ErrInvalid)
 		}
-		if strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		if strings.ContainsFunc(p, isTXTControl) {
 			return nil, fmt.Errorf("%w: control character in TXT data", ErrInvalid)
 		}
 		total += len(p) + 1
 	}
-	if len(parts) == 0 || total > 4000 {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("%w: empty record data", ErrInvalid)
+	}
+	if total > maxTXTData {
 		return nil, fmt.Errorf("%w: TXT data too long", ErrInvalid)
 	}
 	return parts, nil
+}
+
+func isTXTControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+// splitTXT cuts raw text into strings of at most 255 bytes. Valid UTF-8 is
+// cut before the start of a character, never inside one, so every string
+// stays valid UTF-8 and shows as text; other bytes are cut at 255.
+func splitTXT(s string) []string {
+	valid := utf8.ValidString(s)
+	var out []string
+	for len(s) > maxTXTChunk {
+		cut := maxTXTChunk
+		for valid && cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		out = append(out, s[:cut])
+		s = s[cut:]
+	}
+	return append(out, s)
+}
+
+// TXTLines renders the data of a TXT record (its canonical form) as text
+// for a multi-line form field: one character-string per line, unquoted when
+// the line reads back as the same string, quoted otherwise (an empty
+// string, surrounding spaces, a leading double quote, control characters or
+// bytes that are not UTF-8). Parsing the result with NewDNSRecord gives the
+// same record. Data that does not parse is returned unchanged.
+func TXTLines(data string) string {
+	parts, err := txtStrings(data)
+	if err != nil {
+		return data
+	}
+	lines := make([]string, len(parts))
+	for i, p := range parts {
+		if p == "" || strings.TrimSpace(p) != p || strings.HasPrefix(p, `"`) ||
+			strings.ContainsFunc(p, isTXTControl) || !utf8.ValidString(p) {
+			lines[i] = strconv.Quote(p)
+		} else {
+			lines[i] = p
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func quoteTXT(parts []string) string {
